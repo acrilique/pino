@@ -557,14 +557,18 @@ fn export(input_dir: &Path, output_dir: &Path, config: &ExportConfig) -> rekordc
         label: DeviceSQLString::empty(),
     })))?;
 
-    // Insert artist rows.
-    for (name, &id) in &artist_map {
+    // Insert artist rows (sorted by ID for deterministic output).
+    let mut artists_sorted: Vec<_> = artist_map.iter().collect();
+    artists_sorted.sort_by_key(|&(_, &id)| id);
+    for (name, &id) in artists_sorted {
         let artist = Artist::builder().id(id).name(name.parse()?).build();
         db.add_row(Row::Plain(PlainRow::Artist(artist)))?;
     }
 
-    // Insert album rows.
-    for ((album_name, artist_id), &id) in &album_map {
+    // Insert album rows (sorted by ID for deterministic output).
+    let mut albums_sorted: Vec<_> = album_map.iter().collect();
+    albums_sorted.sort_by_key(|&(_, &id)| id);
+    for ((album_name, artist_id), &id) in albums_sorted {
         let album = Album::builder()
             .id(id)
             .artist_id(*artist_id)
