@@ -141,59 +141,6 @@ fn check_ffmpeg() -> bool {
         .is_ok_and(|s| s.success())
 }
 
-/// Decode audio to raw f32le samples via ffmpeg and analyze BPM.
-fn analyze_bpm_via_ffmpeg(path: &Path, min_bpm: f64, max_bpm: f64) -> Result<u32, String> {
-    // Decode to mono f32le raw PCM at 44100 Hz via ffmpeg.
-    let output = std::process::Command::new("ffmpeg")
-        .args(["-i"])
-        .arg(path)
-        .args([
-            "-vn", // ignore video/artwork streams
-            "-ac",
-            "1", // mono
-            "-ar",
-            "44100", // 44.1kHz
-            "-f",
-            "f32le", // raw 32-bit float little-endian
-            "-loglevel",
-            "error",
-            "pipe:1", // output to stdout
-        ])
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .output()
-        .map_err(|e| format!("failed to run ffmpeg: {e}"))?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("ffmpeg decode failed: {}", stderr.trim()));
-    }
-
-    let raw = &output.stdout;
-    if raw.len() < 4 {
-        return Err("ffmpeg produced no audio data".into());
-    }
-
-    // Reinterpret bytes as f32 samples (little-endian).
-    let samples: Vec<f32> = raw
-        .chunks_exact(4)
-        .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
-        .collect();
-
-    // Limit to 180 seconds (matching bpm_finder_tools behavior).
-    let max_samples = 44100 * 180;
-    let samples = if samples.len() > max_samples {
-        &samples[..max_samples]
-    } else {
-        &samples
-    };
-
-    match bpm_finder_tools::file::analyze_samples(samples, 44100, min_bpm, max_bpm) {
-        Ok(analysis) => Ok((analysis.bpm * 100.0) as u32),
-        Err(e) => Err(format!("BPM analysis failed: {e}")),
-    }
-}
-
 struct FfprobeMetadata {
     title: Option<String>,
     artist: Option<String>,
@@ -434,20 +381,10 @@ fn export(input_dir: &Path, output_dir: &Path, config: &ExportConfig) -> rekordc
             }
         };
 
-        // Analyze BPM from source (with ffmpeg decode fallback for problematic files).
-        let tempo = match bpm_finder_tools::file::analyze_path(src_path, 70.0, 200.0) {
-            Ok(analysis) => (analysis.bpm * 100.0) as u32,
-            Err(_) => match analyze_bpm_via_ffmpeg(src_path, 70.0, 200.0) {
-                Ok(tempo) => tempo,
-                Err(e) => {
-                    eprintln!(
-                        "  Warning: could not analyze BPM for {}: {e}",
-                        src_path.file_name().unwrap_or_default().to_string_lossy()
-                    );
-                    0
-                }
-            },
-        };
+        // Setting tempo here to the actual value doesn't change at all the behavior of my CDJ-350
+        // players, which have tempo detection. In the future it makes sense to fill this with a
+        // real value and also to generate valid ANLZ files for each track.
+        let tempo = 0;
 
         // Copy or convert file to destination.
         let dest_path = contents_dir.join(&dest_filename);
@@ -512,7 +449,7 @@ fn export(input_dir: &Path, output_dir: &Path, config: &ExportConfig) -> rekordc
     }
 
     // Create the PDB database.
-    // Use the same 20-table layout as real rekordbox exports, including Unknown table types.
+    // Use the same layout as real rekordbox exports, including Unknown table types.
     let table_page_types = vec![
         PageType::Plain(PlainPageType::Tracks),
         PageType::Plain(PlainPageType::Genres),
@@ -539,43 +476,6 @@ fn export(input_dir: &Path, output_dir: &Path, config: &ExportConfig) -> rekordc
     let pdb_path = rekordbox_dir.join("export.pdb");
     let pdb_file = File::create(&pdb_path)?;
     let mut db = Database::create(pdb_file, DatabaseType::Plain, &table_page_types)?;
-
-    rekordcrate::pdb::defaults::insert_default_colors(&mut db)?;
-    rekordcrate::pdb::defaults::insert_default_columns(&mut db)?;
-    rekordcrate::pdb::defaults::insert_default_menus(&mut db)?;
-
-    // Insert history sync row with current date.
-    let today = chrono::Local::now().format("%Y-%m-%d").to_string();
-    db.add_row(Row::Plain(PlainRow::History(History {
-        subtype: Subtype(640),
-        index_shift: 0,
-        unknown: 0,
-        zeroes: 0,
-        date: today.parse()?,
-        magic: 7705,
-        version: "1000".parse()?,
-        label: DeviceSQLString::empty(),
-    })))?;
-
-    // Insert artist rows (sorted by ID for deterministic output).
-    let mut artists_sorted: Vec<_> = artist_map.iter().collect();
-    artists_sorted.sort_by_key(|&(_, &id)| id);
-    for (name, &id) in artists_sorted {
-        let artist = Artist::builder().id(id).name(name.parse()?).build();
-        db.add_row(Row::Plain(PlainRow::Artist(artist)))?;
-    }
-
-    // Insert album rows (sorted by ID for deterministic output).
-    let mut albums_sorted: Vec<_> = album_map.iter().collect();
-    albums_sorted.sort_by_key(|&(_, &id)| id);
-    for ((album_name, artist_id), &id) in albums_sorted {
-        let album = Album::builder()
-            .id(id)
-            .artist_id(*artist_id)
-            .name(album_name.parse()?)
-            .build();
-        db.add_row(Row::Plain(PlainRow::Album(album)))?;
-    }
 
     // Insert track rows.
     for (i, info) in track_infos.iter().enumerate() {
@@ -632,6 +532,41 @@ fn export(input_dir: &Path, output_dir: &Path, config: &ExportConfig) -> rekordc
         );
     }
 
+    // Insert artist rows (sorted by ID for deterministic output).
+    let mut artists_sorted: Vec<_> = artist_map.iter().collect();
+    artists_sorted.sort_by_key(|&(_, &id)| id);
+    for (name, &id) in artists_sorted {
+        let artist = Artist::builder().id(id).name(name.parse()?).build();
+        db.add_row(Row::Plain(PlainRow::Artist(artist)))?;
+    }
+
+    // Insert album rows (sorted by ID for deterministic output).
+    let mut albums_sorted: Vec<_> = album_map.iter().collect();
+    albums_sorted.sort_by_key(|&(_, &id)| id);
+    for ((album_name, artist_id), &id) in albums_sorted {
+        let album = Album::builder()
+            .id(id)
+            .artist_id(*artist_id)
+            .name(album_name.parse()?)
+            .build();
+        db.add_row(Row::Plain(PlainRow::Album(album)))?;
+    }
+
+    rekordcrate::pdb::defaults::insert_default_colors(&mut db)?;
+    rekordcrate::pdb::defaults::insert_default_columns(&mut db)?;
+    rekordcrate::pdb::defaults::insert_default_menus(&mut db)?;
+
+    // Insert history sync row with current date.
+    let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+    db.add_row(Row::Plain(PlainRow::History(History {
+        subtype: Subtype(640),
+        index_shift: 0,
+        num_tracks: track_infos.len() as u32,
+        date: today.parse()?,
+        version: "1000".parse()?,
+        label: DeviceSQLString::empty(),
+    })))?;
+
     // Write the database.
     db.close()?;
 
@@ -681,5 +616,7 @@ fn main() {
         no_convert: cli.no_convert,
     };
 
-    export(&cli.input_dir, &cli.output_dir, &config).unwrap();
+    if let Err(e) = export(&cli.input_dir, &cli.output_dir, &config) {
+        eprintln!("Error: {e}");
+    }
 }
