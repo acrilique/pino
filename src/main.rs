@@ -478,8 +478,9 @@ fn export(input_dir: &Path, output_dir: &Path, config: &ExportConfig) -> rekordc
     let mut db = Database::create(pdb_file, DatabaseType::Plain, &table_page_types)?;
 
     // Insert track rows.
-    for (i, info) in track_infos.iter().enumerate() {
-        let track_id = (i + 1) as u32;
+    let mut exported_track_count: u32 = 0;
+    for info in &track_infos {
+        let track_id = exported_track_count + 1;
         let artist_id = if info.artist_name.is_empty() {
             0
         } else {
@@ -513,7 +514,19 @@ fn export(input_dir: &Path, output_dir: &Path, config: &ExportConfig) -> rekordc
             .autoload_hotcues("ON".parse()?)
             .date_added(today.parse()?)
             .build();
-        db.add_row(Row::Plain(PlainRow::Track(track)))?;
+        match db.add_row(Row::Plain(PlainRow::Track(track))) {
+            Ok(_) => {
+                exported_track_count += 1;
+            }
+            Err(err @ rekordcrate::Error::TrackRowTooSmall { .. }) => {
+                eprintln!(
+                    "  Warning: track '{}' won't be exported: {err}",
+                    info.dest_filename
+                );
+                continue;
+            }
+            Err(err) => return Err(err),
+        }
 
         println!(
             "  [{}] {} - {}{}",
@@ -561,7 +574,7 @@ fn export(input_dir: &Path, output_dir: &Path, config: &ExportConfig) -> rekordc
     db.add_row(Row::Plain(PlainRow::History(History {
         subtype: Subtype(640),
         index_shift: 0,
-        num_tracks: track_infos.len() as u32,
+        num_tracks: exported_track_count,
         date: today.parse()?,
         version: "1000".parse()?,
         label: DeviceSQLString::empty(),
@@ -572,7 +585,7 @@ fn export(input_dir: &Path, output_dir: &Path, config: &ExportConfig) -> rekordc
 
     println!(
         "\nExported {} track(s), {} artist(s), and {} album(s) to {}",
-        track_infos.len(),
+        exported_track_count,
         artist_map.len(),
         album_map.len(),
         pdb_path.display(),
