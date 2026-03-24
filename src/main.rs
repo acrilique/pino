@@ -16,6 +16,8 @@ use std::collections::HashMap;
 use std::fmt;
 use std::fs::File;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SupportedFormat {
@@ -230,6 +232,7 @@ struct ExportConfig {
     supported_formats: Vec<SupportedFormat>,
     convert_to: SupportedFormat,
     no_convert: bool,
+    jobs: usize,
 }
 
 #[derive(Parser)]
@@ -255,6 +258,9 @@ struct Cli {
     /// Do not convert unsupported files; ignore them instead.
     #[arg(short = 'n', long)]
     no_convert: bool,
+    /// Number of parallel jobs for file conversion/copying.
+    #[arg(short = 'j', long)]
+    jobs: Option<usize>,
 }
 
 fn export(input_dir: &Path, output_dir: &Path, config: &ExportConfig) -> rekordcrate::Result<()> {
@@ -294,30 +300,32 @@ fn export(input_dir: &Path, output_dir: &Path, config: &ExportConfig) -> rekordc
         convert_count,
     );
 
-    // Collect unique artists and albums, and assign IDs.
+    // === Phase 1: Read metadata and prepare tracks (sequential) ===
     let mut artist_map: HashMap<String, u32> = HashMap::new();
     let mut next_artist_id: u32 = 1;
     let mut album_map: HashMap<(String, u32), u32> = HashMap::new();
     let mut next_album_id: u32 = 1;
 
-    struct TrackInfo {
+    struct PreparedTrack {
+        src_path: PathBuf,
         dest_filename: String,
+        dest_format: SupportedFormat,
+        needs_conversion: bool,
         title: String,
         artist_name: String,
         album_name: String,
         duration_secs: u16,
         sample_rate: u32,
         bitrate: u32,
-        file_size: u32,
         tempo: u32,
-        file_type: SupportedFormat,
     }
 
-    let mut track_infos = Vec::new();
+    let mut prepared: Vec<PreparedTrack> = Vec::new();
     let mut used_filenames: HashMap<String, u32> = HashMap::new();
 
     for (src_path, src_format) in &audio_files {
         let src_format = *src_format;
+        let needs_conversion = src_format.is_none();
         // Determine destination format and filename with dedup.
         let original_stem = src_path
             .file_stem()
@@ -386,34 +394,6 @@ fn export(input_dir: &Path, output_dir: &Path, config: &ExportConfig) -> rekordc
         // real value and also to generate valid ANLZ files for each track.
         let tempo = 0;
 
-        // Copy or convert file to destination.
-        let dest_path = contents_dir.join(&dest_filename);
-        if src_format.is_some() {
-            println!(
-                "  Copying {}...",
-                src_path.file_name().unwrap_or_default().to_string_lossy()
-            );
-            std::fs::copy(src_path, &dest_path)?;
-        } else {
-            println!(
-                "  Converting {}...",
-                src_path.file_name().unwrap_or_default().to_string_lossy()
-            );
-            match ffmpeg_convert(src_path, &dest_path, config.convert_to) {
-                Ok(()) => {}
-                Err(e) => {
-                    eprintln!(
-                        "  Warning: conversion failed for {}: {e}",
-                        src_path.file_name().unwrap_or_default().to_string_lossy()
-                    );
-                    let _ = std::fs::remove_file(&dest_path);
-                    continue;
-                }
-            }
-        }
-
-        let file_size = std::fs::metadata(&dest_path)?.len() as u32;
-
         // Register artist.
         if !artist_name.is_empty() && !artist_map.contains_key(&artist_name) {
             artist_map.insert(artist_name.clone(), next_artist_id);
@@ -434,18 +414,174 @@ fn export(input_dir: &Path, output_dir: &Path, config: &ExportConfig) -> rekordc
             }
         }
 
-        track_infos.push(TrackInfo {
+        prepared.push(PreparedTrack {
+            src_path: src_path.clone(),
             dest_filename,
+            dest_format,
+            needs_conversion,
             title,
             artist_name,
             album_name,
             duration_secs,
             sample_rate,
             bitrate,
-            file_size,
             tempo,
-            file_type: dest_format,
         });
+    }
+
+    // === Phase 2: Convert files in parallel to a local temp directory ===
+    // Writing to local disk avoids saturating slow destination I/O (e.g. USB drives).
+    let total = prepared.len();
+    let width = total.to_string().len();
+    let convert_count_actual = prepared.iter().filter(|t| t.needs_conversion).count();
+
+    // Only create temp dir if there are files to convert.
+    let temp_dir = if convert_count_actual > 0 {
+        Some(std::env::temp_dir().join(format!("pino-{}", std::process::id())))
+    } else {
+        None
+    };
+    if let Some(ref td) = temp_dir {
+        std::fs::create_dir_all(td)?;
+    }
+
+    // Each slot: true = conversion succeeded, false = failed.
+    let convert_ok: Vec<Mutex<bool>> = (0..total).map(|_| Mutex::new(false)).collect();
+    let next_idx = AtomicUsize::new(0);
+    let converted = AtomicUsize::new(0);
+
+    // Only convert files in parallel (skip copies, those go straight to destination later).
+    let items_to_convert: Vec<usize> = prepared
+        .iter()
+        .enumerate()
+        .filter(|(_, t)| t.needs_conversion)
+        .map(|(i, _)| i)
+        .collect();
+    let convert_total = items_to_convert.len();
+
+    if convert_total > 0 {
+        std::thread::scope(|s| {
+            let num_workers = config.jobs.min(convert_total).max(1);
+            for _ in 0..num_workers {
+                s.spawn(|| {
+                    loop {
+                        let work_idx = next_idx.fetch_add(1, Ordering::Relaxed);
+                        if work_idx >= convert_total {
+                            break;
+                        }
+                        let idx = items_to_convert[work_idx];
+                        let track = &prepared[idx];
+                        let temp_path =
+                            temp_dir.as_ref().unwrap().join(&track.dest_filename);
+                        let src_name = track
+                            .src_path
+                            .file_name()
+                            .unwrap_or_default()
+                            .to_string_lossy();
+                        let n = converted.fetch_add(1, Ordering::Relaxed) + 1;
+
+                        println!(
+                            "  [{n:>width$}/{convert_total}] Converting {src_name}..."
+                        );
+                        match ffmpeg_convert(
+                            &track.src_path,
+                            &temp_path,
+                            config.convert_to,
+                        ) {
+                            Ok(()) => {
+                                *convert_ok[idx].lock().unwrap() = true;
+                            }
+                            Err(e) => {
+                                eprintln!(
+                                    "  Warning: conversion failed for {src_name}: {e}"
+                                );
+                                let _ = std::fs::remove_file(&temp_path);
+                            }
+                        }
+                    }
+                });
+            }
+        });
+    }
+
+    // === Phase 3: Transfer files sequentially to the destination ===
+    struct TrackInfo {
+        dest_filename: String,
+        title: String,
+        artist_name: String,
+        album_name: String,
+        duration_secs: u16,
+        sample_rate: u32,
+        bitrate: u32,
+        file_size: u32,
+        tempo: u32,
+        file_type: SupportedFormat,
+    }
+
+    let mut track_infos: Vec<TrackInfo> = Vec::new();
+    for (i, track) in prepared.into_iter().enumerate() {
+        let dest_path = contents_dir.join(&track.dest_filename);
+        let src_name = track
+            .src_path
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned();
+
+        let file_size = if track.needs_conversion {
+            if !*convert_ok[i].lock().unwrap() {
+                continue;
+            }
+            let temp_path = temp_dir.as_ref().unwrap().join(&track.dest_filename);
+            println!(
+                "  [{:>width$}/{total}] Moving {}...",
+                track_infos.len() + 1,
+                track.dest_filename,
+            );
+            match std::fs::rename(&temp_path, &dest_path)
+                .or_else(|_| std::fs::copy(&temp_path, &dest_path).map(|_| ()))
+            {
+                Ok(()) => {
+                    let _ = std::fs::remove_file(&temp_path);
+                    std::fs::metadata(&dest_path)?.len() as u32
+                }
+                Err(e) => {
+                    eprintln!("  Warning: failed to move converted file {src_name}: {e}");
+                    let _ = std::fs::remove_file(&temp_path);
+                    continue;
+                }
+            }
+        } else {
+            println!(
+                "  [{:>width$}/{total}] Copying {src_name}...",
+                track_infos.len() + 1
+            );
+            match std::fs::copy(&track.src_path, &dest_path) {
+                Ok(size) => size as u32,
+                Err(e) => {
+                    eprintln!("  Warning: copy failed for {src_name}: {e}");
+                    continue;
+                }
+            }
+        };
+
+        track_infos.push(TrackInfo {
+            dest_filename: track.dest_filename,
+            title: track.title,
+            artist_name: track.artist_name,
+            album_name: track.album_name,
+            duration_secs: track.duration_secs,
+            sample_rate: track.sample_rate,
+            bitrate: track.bitrate,
+            file_size,
+            tempo: track.tempo,
+            file_type: track.dest_format,
+        });
+    }
+
+    // Clean up temp directory.
+    if let Some(ref td) = temp_dir {
+        let _ = std::fs::remove_dir_all(td);
     }
 
     // Create the PDB database.
@@ -523,6 +659,8 @@ fn export(input_dir: &Path, output_dir: &Path, config: &ExportConfig) -> rekordc
                     "  Warning: track '{}' won't be exported: {err}",
                     info.dest_filename
                 );
+                let dest_path = contents_dir.join(&info.dest_filename);
+                let _ = std::fs::remove_file(&dest_path);
                 continue;
             }
             Err(err) => return Err(err),
@@ -623,10 +761,17 @@ fn main() {
         std::process::exit(1);
     }
 
+    let jobs = cli.jobs.unwrap_or_else(|| {
+        std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(1)
+    });
+
     let config = ExportConfig {
         supported_formats,
         convert_to,
         no_convert: cli.no_convert,
+        jobs,
     };
 
     if let Err(e) = export(&cli.input_dir, &cli.output_dir, &config) {
