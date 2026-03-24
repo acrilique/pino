@@ -61,9 +61,10 @@ pub fn export(
 ) -> rekordcrate::Result<()> {
     // Check FFmpeg availability if conversion is enabled.
     if !config.no_convert && !ffmpeg::check_available() {
-        eprintln!("Error: ffmpeg is required for audio conversion but was not found in PATH.");
-        eprintln!("Install ffmpeg or use --no-convert to skip unsupported files.");
-        std::process::exit(1);
+        return Err(std::io::Error::other(
+            "ffmpeg is required for audio conversion but was not found in PATH",
+        )
+        .into());
     }
 
     let rekordbox_dir = output_dir.join("PIONEER").join("rekordbox");

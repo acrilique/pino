@@ -11,7 +11,9 @@ use std::path::Path;
 
 pub fn convert(src: &Path, dest: &Path, target: SupportedFormat) -> std::io::Result<()> {
     let mut cmd = std::process::Command::new("ffmpeg");
-    cmd.args(["-i"]).arg(src).args(["-y", "-loglevel", "error"]);
+    cmd.args(["-i"])
+        .arg(src)
+        .args(["-y", "-vn", "-loglevel", "error"]);
 
     match target {
         SupportedFormat::Mp3 => {
