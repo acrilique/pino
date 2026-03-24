@@ -13,8 +13,10 @@ jobs:
                 include:
                     - os: ubuntu-latest
                       package-types: appimage
+                      no-strip: true
                     - os: windows-latest
-                      package-types: exe
+                      package-types: msi
+                      no-strip: false
         runs-on: ${{ matrix.os }}
         permissions:
             contents: read
@@ -35,9 +37,9 @@ jobs:
               run: cargo install dioxus-cli --locked
 
             - name: Bundle app
-              run: dx bundle --desktop --package-types "${{ matrix.package-types }}"
+              run: dx bundle --release --desktop --package-types "${{ matrix.package-types }}"
               env:
-                  NO_STRIP: true
+                  NO_STRIP: ${{ matrix.no-strip }}
 
             - name: Upload artifacts
               uses: actions/upload-artifact@v4
