@@ -246,6 +246,7 @@ fn LibraryTab(mut tracks: Signal<Vec<db::TrackWithFiles>>) -> Element {
             let title = twf.track.title.clone();
             let artist = twf.track.artist.clone();
             let album = twf.track.album.clone();
+            let tempo = twf.track.tempo;
             let track_id = track_id.clone();
             drop(w);
 
@@ -255,10 +256,9 @@ fn LibraryTab(mut tracks: Signal<Vec<db::TrackWithFiles>>) -> Element {
             spawn(async move {
                 let (tx, rx) = tokio::sync::oneshot::channel();
                 std::thread::spawn(move || {
-                    let _ = tx.send(
-                        db::Library::open(&db)
-                            .and_then(|lib| lib.update_track(&track_id, &title, &artist, &album)),
-                    );
+                    let _ = tx.send(db::Library::open(&db).and_then(|lib| {
+                        lib.update_track(&track_id, &title, &artist, &album, tempo)
+                    }));
                 });
                 let _ = rx.await;
             });
@@ -358,7 +358,16 @@ fn LibraryTab(mut tracks: Signal<Vec<db::TrackWithFiles>>) -> Element {
                         spawn(async move {
                             let (tx, rx) = tokio::sync::oneshot::channel();
                             std::thread::spawn(move || {
-                                let _ = tx.send(sync::convert_tracks(&db, &track_ids, target));
+                                let num_cpus = std::thread::available_parallelism()
+                                    .map(|n| n.get())
+                                    .unwrap_or(4);
+                                let _ = tx.send(sync::convert_tracks(
+                                    &db,
+                                    &track_ids,
+                                    target,
+                                    num_cpus,
+                                    &|_| {},
+                                ));
                             });
                             match rx.await {
                                 Ok(Ok(n)) => {
@@ -669,7 +678,37 @@ fn SyncTab(mut tracks: Signal<Vec<db::TrackWithFiles>>) -> Element {
     let mut convert_to_idx = use_signal(|| None::<usize>);
     let mut auto_convert = use_signal(|| true);
     let mut syncing = use_signal(|| false);
+    let mut pulling = use_signal(|| false);
     let mut log_entries = use_signal(Vec::<LogEntry>::new);
+    let mut progress_phase = use_signal(String::new);
+    let mut progress_current = use_signal(|| 0u32);
+    let mut progress_total = use_signal(|| 0u32);
+    let mut jobs = use_signal(|| {
+        std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(4)
+    });
+
+    // Count tracks on the device that are not in the local library.
+    let mut remote_only_count = use_signal(|| 0u32);
+    use_effect(move || {
+        let dir = dest_dir();
+        if dir.is_empty() {
+            remote_only_count.set(0);
+            return;
+        }
+        let db = db_path();
+        let dest = PathBuf::from(dir);
+        spawn(async move {
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            std::thread::spawn(move || {
+                let _ = tx.send(sync::count_remote_only(&db, &dest).unwrap_or(0));
+            });
+            if let Ok(n) = rx.await {
+                remote_only_count.set(n);
+            }
+        });
+    });
 
     // Count tracks that need conversion for the currently selected formats.
     let need_conversion = use_memo(move || {
@@ -702,6 +741,66 @@ fn SyncTab(mut tracks: Signal<Vec<db::TrackWithFiles>>) -> Element {
             label: "Destination".to_string(),
             value: dest_dir,
             placeholder: "/path/to/usb".to_string(),
+        }
+
+        if remote_only_count() > 0 {
+            div { class: "warning",
+                p {
+                    "{remote_only_count()} track(s) on this device are not in your local library."
+                }
+                button {
+                    disabled: pulling() || syncing(),
+                    onclick: move |_| {
+                        let db = db_path();
+                        let dest = PathBuf::from(dest_dir());
+                        pulling.set(true);
+                        log_entries.write().clear();
+                        log_entries.write().push(LogEntry::info("Pulling tracks from device..."));
+                        progress_phase.set(String::new());
+                        progress_current.set(0);
+                        progress_total.set(0);
+
+                        spawn(async move {
+                            let (result_tx, result_rx) = tokio::sync::oneshot::channel();
+                            let (ptx, mut prx) = tokio::sync::mpsc::channel::<sync::SyncProgress>(64);
+
+                            std::thread::spawn(move || {
+                                let callback = move |p: sync::SyncProgress| {
+                                    let _ = ptx.blocking_send(p);
+                                };
+                                let result = sync::pull_from_remote(&db, &dest, &callback);
+                                let _ = result_tx.send(result);
+                            });
+
+                            while let Some(p) = prx.recv().await {
+                                progress_phase.set(p.phase.to_string());
+                                progress_current.set(p.current);
+                                progress_total.set(p.total);
+                            }
+
+                            match result_rx.await {
+                                Ok(Ok(n)) => {
+                                    log_entries.write().push(LogEntry::success(
+                                        &format!("Pulled {n} track(s) from device."),
+                                    ));
+                                    refresh_tracks(&mut tracks);
+                                    remote_only_count.set(0);
+                                }
+                                Ok(Err(e)) => {
+                                    log_entries.write().push(LogEntry::error(
+                                        &format!("Pull failed: {e}"),
+                                    ));
+                                }
+                                Err(_) => {
+                                    log_entries.write().push(LogEntry::error("Pull thread panicked."));
+                                }
+                            }
+                            pulling.set(false);
+                        });
+                    },
+                    if pulling() { "Pulling..." } else { "Pull" }
+                }
+            }
         }
 
         div { class: "field",
@@ -763,9 +862,27 @@ fn SyncTab(mut tracks: Signal<Vec<db::TrackWithFiles>>) -> Element {
             }
         }
 
+        div { class: "field",
+            label { "Parallel jobs" }
+            div { class: "dir-row",
+                input {
+                    r#type: "number",
+                    min: "1",
+                    max: "32",
+                    value: "{jobs}",
+                    class: "jobs-input",
+                    oninput: move |e: FormEvent| {
+                        if let Ok(n) = e.value().parse::<usize>() {
+                            jobs.set(n.clamp(1, 32));
+                        }
+                    },
+                }
+            }
+        }
+
         button {
             class: "export-btn",
-            disabled: syncing() || dest_dir().is_empty(),
+            disabled: syncing() || pulling() || dest_dir().is_empty(),
             onclick: move |_| {
                 let enabled = *format_enabled.read();
                 let supported: Vec<SupportedFormat> = FORMATS
@@ -783,7 +900,7 @@ fn SyncTab(mut tracks: Signal<Vec<db::TrackWithFiles>>) -> Element {
                     return;
                 }
 
-                let convert_to = if auto_convert() {
+                let convert_to = if auto_convert() && need_conversion() > 0 {
                     let Some(idx) = convert_to_idx() else {
                         log_entries.write().push(LogEntry::error(
                             "Select a conversion target format.",
@@ -805,24 +922,40 @@ fn SyncTab(mut tracks: Signal<Vec<db::TrackWithFiles>>) -> Element {
                 let config = sync::SyncConfig {
                     supported_formats: supported,
                     convert_to,
+                    jobs: jobs(),
                 };
 
                 let db = db_path();
                 log_entries.write().clear();
-                log_entries.write().push(LogEntry::info("Syncing..."));
+                progress_phase.set(String::new());
+                progress_current.set(0);
+                progress_total.set(0);
                 syncing.set(true);
 
                 spawn(async move {
-                    let (tx, rx) = tokio::sync::oneshot::channel();
+                    let (result_tx, result_rx) = tokio::sync::oneshot::channel();
+                    let (ptx, mut prx) = tokio::sync::mpsc::channel::<sync::SyncProgress>(64);
+
                     std::thread::spawn(move || {
-                        let _ = tx.send(sync::sync(&db, &dest, &config));
+                        let callback = move |p: sync::SyncProgress| {
+                            let _ = ptx.blocking_send(p);
+                        };
+                        let result = sync::sync(&db, &dest, &config, &callback);
+                        let _ = result_tx.send(result);
                     });
-                    match rx.await {
+
+                    // Process progress updates until the channel closes.
+                    while let Some(p) = prx.recv().await {
+                        progress_phase.set(p.phase.to_string());
+                        progress_current.set(p.current);
+                        progress_total.set(p.total);
+                    }
+
+                    match result_rx.await {
                         Ok(Ok(result)) => {
                             log_entries
                                 .write()
                                 .push(LogEntry::success(&result.to_string()));
-                            // Refresh tracks since sync may have added converted files locally.
                             if result.converted > 0 {
                                 refresh_tracks(&mut tracks);
                             }
@@ -841,7 +974,20 @@ fn SyncTab(mut tracks: Signal<Vec<db::TrackWithFiles>>) -> Element {
                     syncing.set(false);
                 });
             },
-            if syncing() { "Syncing..." } else { "Sync" }
+            if syncing() { "Pushing..." } else { "Push" }
+        }
+
+        if syncing() && progress_total() > 0 {
+            div { class: "progress-section",
+                p { class: "progress-label", "{progress_phase()}" }
+                div { class: "progress-bar",
+                    div {
+                        class: "progress-fill",
+                        width: "{progress_current() as f64 / progress_total() as f64 * 100.0}%",
+                    }
+                }
+                p { class: "progress-count", "{progress_current()}/{progress_total()}" }
+            }
         }
 
         if !log_entries.read().is_empty() {

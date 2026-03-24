@@ -281,17 +281,18 @@ impl Library {
         Ok(count > 0)
     }
 
-    /// Update the metadata fields (title, artist, album) for a track.
+    /// Update the metadata fields (title, artist, album, tempo) for a track.
     pub fn update_track(
         &self,
         id: &str,
         title: &str,
         artist: &str,
         album: &str,
+        tempo: u32,
     ) -> rusqlite::Result<()> {
         self.conn.execute(
-            "UPDATE tracks SET title = ?1, artist = ?2, album = ?3 WHERE id = ?4",
-            params![title, artist, album, id],
+            "UPDATE tracks SET title = ?1, artist = ?2, album = ?3, tempo = ?4 WHERE id = ?5",
+            params![title, artist, album, tempo, id],
         )?;
         Ok(())
     }
