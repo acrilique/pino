@@ -10,10 +10,10 @@ edition = "2024"
 rekordcrate = { path = "../rekordcrate" }
 lofty = "0.23.3"
 chrono = "0.4.44"
-dioxus = "0.7.3"
+dioxus = { version = "0.7.3", features = ["desktop"] }
 rfd = "0.17.2"
 tokio = { version = "1", features = ["sync"] }
-rusqlite = { version = "0.34", features = ["bundled"] }
+rusqlite = { version = "0.39.0", features = ["bundled"] }
 uuid = { version = "1", features = ["v4"] }
 dirs = "6"
 dioxus-primitives = { git = "https://github.com/DioxusLabs/components", version = "0.0.1", default-features = false }

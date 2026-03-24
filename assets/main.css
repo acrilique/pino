@@ -216,13 +216,66 @@ input[type="checkbox"] {
     top: 0;
 }
 
+.track-list thead th.sortable {
+    cursor: pointer;
+    user-select: none;
+}
+
+.track-list thead th.sortable:hover {
+    color: #c5c5c5;
+}
+
+.track-list thead th.sortable.active {
+    color: #3b82f6;
+}
+
+.sort-indicator {
+    font-size: 10px;
+    margin-left: 2px;
+}
+
 .track-list tbody td {
     padding: 6px 10px;
     border-top: 1px solid #1a1d24;
+    line-height: 1.25;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
     max-width: 180px;
+}
+
+.track-list tbody td.editable-cell {
+    cursor: text;
+}
+
+.track-list tbody td.editable-cell:hover {
+    background: #1e2028;
+}
+
+.track-list tbody td.editing-cell {
+    padding: 0;
+    background: #151922;
+}
+
+.cell-edit-input {
+    appearance: none;
+    -webkit-appearance: none;
+    background: transparent;
+    border: none;
+    box-shadow: inset 0 -1px 0 #3b82f6;
+    color: #e0e0e0;
+    padding: 6px 10px;
+    margin: 0;
+    display: block;
+    height: calc(1.25em + 12px);
+    line-height: 1.25;
+    font-size: 13px;
+    font-weight: inherit;
+    width: 100%;
+    box-sizing: border-box;
+    outline: none;
+    font-family: inherit;
+    border-radius: 0;
 }
 
 .track-list tbody tr:hover {
@@ -264,4 +317,49 @@ input[type="checkbox"] {
     margin-top: 20px;
     padding-top: 16px;
     border-top: 1px solid #1e2028;
+}
+
+.context-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 99;
+}
+
+.context-menu {
+    position: absolute;
+    background: #1a1d24;
+    border: 1px solid #2a2d34;
+    border-radius: 6px;
+    padding: 4px;
+    z-index: 100;
+    min-width: 160px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+}
+
+.context-item {
+    display: block;
+    width: 100%;
+    text-align: left;
+    background: none;
+    border: none;
+    color: #e0e0e0;
+    padding: 6px 12px;
+    font-size: 13px;
+    border-radius: 4px;
+    cursor: pointer;
+}
+
+.context-item:hover {
+    background: #282b34;
+}
+
+.context-item.danger {
+    color: #f87171;
+}
+
+.context-item.danger:hover {
+    background: #2a1515;
 }

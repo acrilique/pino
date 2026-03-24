@@ -281,6 +281,37 @@ impl Library {
         Ok(count > 0)
     }
 
+    /// Update the metadata fields (title, artist, album) for a track.
+    pub fn update_track(
+        &self,
+        id: &str,
+        title: &str,
+        artist: &str,
+        album: &str,
+    ) -> rusqlite::Result<()> {
+        self.conn.execute(
+            "UPDATE tracks SET title = ?1, artist = ?2, album = ?3 WHERE id = ?4",
+            params![title, artist, album, id],
+        )?;
+        Ok(())
+    }
+
+    /// Delete a single file entry by its id.
+    pub fn delete_file(&self, file_id: &str) -> rusqlite::Result<()> {
+        self.conn
+            .execute("DELETE FROM files WHERE id = ?1", params![file_id])?;
+        Ok(())
+    }
+
+    /// Delete a track and all its associated files.
+    pub fn delete_track(&self, track_id: &str) -> rusqlite::Result<()> {
+        self.conn
+            .execute("DELETE FROM files WHERE track_id = ?1", params![track_id])?;
+        self.conn
+            .execute("DELETE FROM tracks WHERE id = ?1", params![track_id])?;
+        Ok(())
+    }
+
     /// Get all file_path values in the DB (for deduplication on the remote side).
     pub fn used_filenames(&self) -> rusqlite::Result<HashMap<String, u32>> {
         let mut stmt = self.conn.prepare("SELECT file_path FROM files")?;
