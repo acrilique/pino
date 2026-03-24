@@ -2,12 +2,12 @@
 name = "pino"
 version = "0.1.0"
 authors = ["Lluc Simó Margalef <lluc.simo@protonmail.com>"]
-description = "Experimental CLI tool to export audio files generating a Pioneer-compatible USB drive"
+description = "Experimental app to export audio files generating a Pioneer-compatible USB drive"
 license = "MPL-2.0"
 edition = "2024"
 
 [dependencies]
-rekordcrate = { path = "../rekordcrate" }
+rekordcrate = { git = "https://github.com/acrilique/rekordcrate", branch = "create-db" }
 lofty = "0.23.3"
 chrono = "0.4.44"
 dioxus = { version = "0.7.3", features = ["desktop"] }
