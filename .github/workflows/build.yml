@@ -41,8 +41,16 @@ jobs:
               env:
                   NO_STRIP: ${{ matrix.no-strip }}
 
-            - name: Upload artifacts
+            - name: Upload artifacts (Linux)
+              if: runner.os == 'Linux'
               uses: actions/upload-artifact@v7
               with:
                   name: pino-${{ runner.os }}
-                  path: target/dx/pino/bundle/
+                  path: target/dx/pino/bundle/linux/bundle/appimage/Pino_*.AppImage
+
+            - name: Upload artifacts (Windows)
+              if: runner.os == 'Windows'
+              uses: actions/upload-artifact@v7
+              with:
+                  name: pino-${{ runner.os }}
+                  path: target/dx/pino/bundle/windows/bundle/msi/Pino_*.msi
