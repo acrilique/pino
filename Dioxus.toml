@@ -29,4 +29,5 @@ category = "Utility"
 icon = [
     "icons/128x128.png",
     "icons/128x128@2x.png",
+    "icons/icon.ico"
 ]
