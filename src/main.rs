@@ -99,8 +99,25 @@ fn db_path() -> PathBuf {
 }
 
 fn main() {
+    let custom_head = format!(
+        "<style>{}</style><style>{}</style><style>{}</style><style>{}</style>",
+        include_str!("../assets/main.css"),
+        include_str!("../assets/dx-components-theme.css"),
+        include_str!("components/input/style.css"),
+        include_str!("components/select/style.css"),
+    );
+
+    let data_dir = dirs::data_local_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("pino");
+
     dioxus::LaunchBuilder::new()
-        .with_cfg(dioxus::desktop::Config::new().with_menu(None))
+        .with_cfg(
+            dioxus::desktop::Config::new()
+                .with_menu(None)
+                .with_data_directory(data_dir)
+                .with_custom_head(custom_head),
+        )
         .launch(App);
 }
 
@@ -134,9 +151,6 @@ fn App() -> Element {
     });
 
     rsx! {
-        document::Stylesheet { href: asset!("/assets/main.css") }
-        document::Stylesheet { href: asset!("/assets/dx-components-theme.css") }
-
         div { class: "container",
             h1 { "pino" }
             p { class: "subtitle", "acrilique's USB exporter - powered by rekordcrate" }
