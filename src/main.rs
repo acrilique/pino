@@ -115,24 +115,18 @@ fn main() {
         .launch(App);
 }
 
-#[derive(Clone, Copy, PartialEq)]
-enum Tab {
-    Library,
-    Sync,
-}
-
 #[component]
 fn App() -> Element {
-    let mut tab = use_signal(|| Tab::Library);
     let mut tracks = use_signal(Vec::<db::TrackWithFiles>::new);
+    let mut sync_open = use_signal(|| false);
 
-    // Library tab state.
+    // Library state.
     let scanning = use_signal(|| false);
     let lib_log_entries = use_signal(Vec::<LogEntry>::new);
     let sort_key = use_signal(|| SortKey::Artist);
     let sort_order = use_signal(|| SortOrder::Asc);
 
-    // Sync tab state.
+    // Sync state.
     let dest_dir = use_signal(String::new);
     let format_enabled = use_signal(|| [true, true, true, true, false]);
     let sync_convert_to_idx = use_signal(|| None::<usize>);
@@ -148,25 +142,28 @@ fn App() -> Element {
             .map(|n| n.get())
             .unwrap_or(4)
     });
-    let mut remote_only_count = use_signal(|| 0u32);
+    let mut sync_status = use_signal(|| None::<sync::SyncStatus>);
+    let mut checking = use_signal(|| false);
 
-    // Count tracks on the device that are not in the local library.
+    // Check sync status when destination changes.
     use_effect(move || {
         let dir = dest_dir();
         if dir.is_empty() {
-            remote_only_count.set(0);
+            sync_status.set(None);
             return;
         }
         let db = paths::db_path();
         let dest = PathBuf::from(dir);
+        checking.set(true);
         spawn(async move {
             let (tx, rx) = tokio::sync::oneshot::channel();
             std::thread::spawn(move || {
-                let _ = tx.send(sync::count_remote_only(&db, &dest).unwrap_or(0));
+                let _ = tx.send(sync::check_sync_status(&db, &dest));
             });
-            if let Ok(n) = rx.await {
-                remote_only_count.set(n);
+            if let Ok(Ok(status)) = rx.await {
+                sync_status.set(Some(status));
             }
+            checking.set(false);
         });
     });
 
@@ -194,46 +191,52 @@ fn App() -> Element {
             h1 { "pino" }
             p { class: "subtitle", "acrilique's USB exporter - powered by rekordcrate" }
 
-            div { class: "tabs",
-                button {
-                    class: if tab() == Tab::Library { "tab active" } else { "tab" },
-                    onclick: move |_| tab.set(Tab::Library),
-                    "Library"
-                }
-                button {
-                    class: if tab() == Tab::Sync { "tab active" } else { "tab" },
-                    onclick: move |_| tab.set(Tab::Sync),
-                    "Sync"
-                }
+            Library {
+                tracks,
+                scanning,
+                log_entries: lib_log_entries,
+                sort_key,
+                sort_order,
+                on_sync: move |_| sync_open.set(true),
             }
 
-            match tab() {
-                Tab::Library => rsx! {
-                    LibraryTab {
-                        tracks,
-                        scanning,
-                        log_entries: lib_log_entries,
-                        sort_key,
-                        sort_order,
-                    }
-                },
-                Tab::Sync => rsx! {
-                    SyncTab {
-                        tracks,
-                        dest_dir,
-                        format_enabled,
-                        convert_to_idx: sync_convert_to_idx,
-                        auto_convert,
-                        syncing,
-                        pulling,
-                        log_entries: sync_log_entries,
-                        progress_phase,
-                        progress_current,
-                        progress_total,
-                        jobs,
-                        remote_only_count,
-                    }
-                },
+            if sync_open() {
+                SyncModal {
+                    tracks,
+                    dest_dir,
+                    format_enabled,
+                    convert_to_idx: sync_convert_to_idx,
+                    auto_convert,
+                    syncing,
+                    pulling,
+                    log_entries: sync_log_entries,
+                    progress_phase,
+                    progress_current,
+                    progress_total,
+                    jobs,
+                    sync_status,
+                    checking,
+                    on_close: move |_| sync_open.set(false),
+                    on_refresh: move |_| {
+                        let dir = dest_dir();
+                        if dir.is_empty() {
+                            return;
+                        }
+                        let db = paths::db_path();
+                        let dest = PathBuf::from(dir);
+                        checking.set(true);
+                        spawn(async move {
+                            let (tx, rx) = tokio::sync::oneshot::channel();
+                            std::thread::spawn(move || {
+                                let _ = tx.send(sync::check_sync_status(&db, &dest));
+                            });
+                            if let Ok(Ok(status)) = rx.await {
+                                sync_status.set(Some(status));
+                            }
+                            checking.set(false);
+                        });
+                    },
+                }
             }
         }
     }
@@ -257,12 +260,13 @@ fn refresh_tracks(tracks: &mut Signal<Vec<db::TrackWithFiles>>) {
 }
 
 #[component]
-fn LibraryTab(
+fn Library(
     mut tracks: Signal<Vec<db::TrackWithFiles>>,
     mut scanning: Signal<bool>,
     mut log_entries: Signal<Vec<LogEntry>>,
     sort_key: Signal<SortKey>,
     sort_order: Signal<SortOrder>,
+    on_sync: EventHandler,
 ) -> Element {
     // Which cell is being edited: (track_id, column).
     let mut editing = use_signal(|| None::<(String, EditColumn)>);
@@ -390,6 +394,12 @@ fn LibraryTab(
                     });
                 },
                 if scanning() { "..." } else { "+" }
+            }
+            button {
+                class: "sync-btn",
+                title: "Sync to USB",
+                onclick: move |_| on_sync.call(()),
+                "➤"
             }
             p { class: "track-count", "{tracks.read().len()} track(s) in library" }
         }
@@ -687,7 +697,7 @@ fn format_duration(secs: u16) -> String {
 }
 
 #[component]
-fn SyncTab(
+fn SyncModal(
     mut tracks: Signal<Vec<db::TrackWithFiles>>,
     dest_dir: Signal<String>,
     mut format_enabled: Signal<[bool; 5]>,
@@ -700,7 +710,10 @@ fn SyncTab(
     mut progress_current: Signal<u32>,
     mut progress_total: Signal<u32>,
     mut jobs: Signal<usize>,
-    mut remote_only_count: Signal<u32>,
+    mut sync_status: Signal<Option<sync::SyncStatus>>,
+    checking: Signal<bool>,
+    on_close: EventHandler,
+    on_refresh: EventHandler,
 ) -> Element {
     // Count tracks that need conversion for the currently selected formats.
     let need_conversion = use_memo(move || {
@@ -728,19 +741,83 @@ fn SyncTab(
             .count() as u32
     });
 
+    let has_dest = !dest_dir().is_empty();
+    let status = sync_status();
+    let to_push = status.map_or(0, |s| s.to_push);
+    let to_pull = status.map_or(0, |s| s.to_pull);
+    let up_to_date = status.is_some_and(|s| s.to_push == 0 && s.to_pull == 0);
+
+    let busy = syncing() || pulling();
+
     rsx! {
+        div {
+            class: "modal-backdrop",
+            onclick: move |_| {
+                if !busy {
+                    on_close.call(());
+                }
+            },
+        }
+        div { class: "modal",
+            div { class: "modal-header",
+                h2 { "Sync to USB" }
+                div { class: "modal-header-actions",
+                    button {
+                        class: "modal-refresh",
+                        disabled: busy || checking(),
+                        title: "Re-check device",
+                        onclick: move |_| on_refresh.call(()),
+                        "↻"
+                    }
+                    button {
+                        class: "modal-close",
+                        disabled: busy,
+                        onclick: move |_| on_close.call(()),
+                        "×"
+                    }
+                }
+            }
+            div { class: "modal-body",
+
         DirField {
             label: "Destination".to_string(),
             value: dest_dir,
             placeholder: "/path/to/usb".to_string(),
         }
 
-        if remote_only_count() > 0 {
-            div { class: "warning",
-                p {
-                    "{remote_only_count()} track(s) on this device are not in your local library."
+        if has_dest {
+            if checking() {
+                div { class: "sync-status checking",
+                    span { class: "status-icon", "⟳" }
+                    p { "Checking device..." }
                 }
+            } else if up_to_date && !busy && log_entries.read().is_empty() {
+                div { class: "sync-status up-to-date",
+                    span { class: "status-icon", "✓" }
+                    p { "Everything is up to date." }
+                }
+            } else if status.is_some() && !up_to_date {
+                div { class: "sync-status has-changes",
+                    if to_push > 0 {
+                        div { class: "status-row",
+                            span { class: "status-icon push", "↑" }
+                            p { "{to_push} track(s) to push to device" }
+                        }
+                    }
+                    if to_pull > 0 {
+                        div { class: "status-row",
+                            span { class: "status-icon pull", "↓" }
+                            p { "{to_pull} track(s) on device not in your library" }
+                        }
+                    }
+                }
+            }
+        }
+
+        if has_dest && to_pull > 0 && !checking() {
+            div { class: "pull-section",
                 button {
+                    class: "pull-btn",
                     disabled: pulling() || syncing(),
                     onclick: move |_| {
                         let db = paths::db_path();
@@ -776,7 +853,11 @@ fn SyncTab(
                                         &format!("Pulled {n} track(s) from device."),
                                     ));
                                     refresh_tracks(&mut tracks);
-                                    remote_only_count.set(0);
+                                    // Clear the pull count.
+                                    if let Some(mut s) = sync_status() {
+                                        s.to_pull = 0;
+                                        sync_status.set(Some(s));
+                                    }
                                 }
                                 Ok(Err(e)) => {
                                     log_entries.write().push(LogEntry::error(
@@ -790,187 +871,194 @@ fn SyncTab(
                             pulling.set(false);
                         });
                     },
-                    if pulling() { "Pulling..." } else { "Pull" }
+                    if pulling() { "Pulling..." } else { "Pull from device" }
                 }
             }
         }
 
-        div { class: "field",
-            label { "Allowed Formats" }
-            div { class: "formats",
-                for (i, (_, name)) in FORMATS.iter().enumerate() {
-                    label { class: "checkbox-label",
-                        input {
-                            r#type: "checkbox",
-                            checked: format_enabled.read()[i],
-                            oninput: move |_| {
-                                let current = format_enabled.read()[i];
-                                format_enabled.write()[i] = !current;
-                            },
-                        }
-                        "{name}"
-                    }
-                }
-            }
-        }
-
-        if need_conversion() > 0 {
-            div { class: "warning",
-                p {
-                    "{need_conversion()} track(s) have no file in any of the selected formats."
-                }
-                div { class: "field",
-                    label { class: "checkbox-label",
-                        input {
-                            r#type: "checkbox",
-                            checked: auto_convert(),
-                            oninput: move |_| auto_convert.set(!auto_convert()),
-                        }
-                        "Convert them during sync to"
-                    }
-                    if auto_convert() {
-                        Select::<usize> {
-                            on_value_change: move |val: Option<usize>| {
-                                convert_to_idx.set(val);
-                            },
-                            SelectTrigger {
-                                {format_label(convert_to_idx())}
+        if has_dest && to_push > 0 && !checking() {
+            div { class: "field",
+                label { "Allowed Formats" }
+                div { class: "formats",
+                    for (i, (_, name)) in FORMATS.iter().enumerate() {
+                        label { class: "checkbox-label",
+                            input {
+                                r#type: "checkbox",
+                                checked: format_enabled.read()[i],
+                                oninput: move |_| {
+                                    let current = format_enabled.read()[i];
+                                    format_enabled.write()[i] = !current;
+                                },
                             }
-                            SelectList {
-                                for (i, (_, name)) in FORMATS.iter().enumerate() {
-                                    if format_enabled.read()[i] {
-                                        SelectOption::<usize> {
-                                            value: i,
-                                            index: i,
-                                            text_value: name.to_string(),
-                                            "{name}"
+                            "{name}"
+                        }
+                    }
+                }
+            }
+
+            if need_conversion() > 0 {
+                div { class: "warning",
+                    p {
+                        "{need_conversion()} track(s) have no file in any of the selected formats."
+                    }
+                    div { class: "field",
+                        label { class: "checkbox-label",
+                            input {
+                                r#type: "checkbox",
+                                checked: auto_convert(),
+                                oninput: move |_| auto_convert.set(!auto_convert()),
+                            }
+                            "Convert them during sync to"
+                        }
+                        if auto_convert() {
+                            Select::<usize> {
+                                on_value_change: move |val: Option<usize>| {
+                                    convert_to_idx.set(val);
+                                },
+                                SelectTrigger {
+                                    {format_label(convert_to_idx())}
+                                }
+                                SelectList {
+                                    for (i, (_, name)) in FORMATS.iter().enumerate() {
+                                        if format_enabled.read()[i] {
+                                            SelectOption::<usize> {
+                                                value: i,
+                                                index: i,
+                                                text_value: name.to_string(),
+                                                "{name}"
+                                            }
                                         }
                                     }
                                 }
                             }
                         }
                     }
-                }
-                if auto_convert() {
-                    div { class: "field",
-                        label { "Parallel jobs" }
-                        div { class: "dir-row",
-                            input {
-                                r#type: "number",
-                                min: "1",
-                                max: "32",
-                                value: "{jobs}",
-                                class: "jobs-input",
-                                oninput: move |e: FormEvent| {
-                                    if let Ok(n) = e.value().parse::<usize>() {
-                                        jobs.set(n.clamp(1, 32));
-                                    }
-                                },
+                    if auto_convert() {
+                        div { class: "field",
+                            label { "Parallel jobs" }
+                            div { class: "dir-row",
+                                input {
+                                    r#type: "number",
+                                    min: "1",
+                                    max: "32",
+                                    value: "{jobs}",
+                                    class: "jobs-input",
+                                    oninput: move |e: FormEvent| {
+                                        if let Ok(n) = e.value().parse::<usize>() {
+                                            jobs.set(n.clamp(1, 32));
+                                        }
+                                    },
+                                }
                             }
                         }
                     }
                 }
             }
-        }
 
-        button {
-            class: "export-btn",
-            disabled: syncing() || pulling() || dest_dir().is_empty(),
-            onclick: move |_| {
-                let enabled = *format_enabled.read();
-                let supported: Vec<SupportedFormat> = FORMATS
-                    .iter()
-                    .enumerate()
-                    .filter(|(i, _)| enabled[*i])
-                    .map(|(_, (fmt, _))| *fmt)
-                    .collect();
-                let dest = PathBuf::from(dest_dir());
+            button {
+                class: "export-btn",
+                disabled: syncing() || pulling(),
+                onclick: move |_| {
+                    let enabled = *format_enabled.read();
+                    let supported: Vec<SupportedFormat> = FORMATS
+                        .iter()
+                        .enumerate()
+                        .filter(|(i, _)| enabled[*i])
+                        .map(|(_, (fmt, _))| *fmt)
+                        .collect();
+                    let dest = PathBuf::from(dest_dir());
 
-                if supported.is_empty() {
-                    log_entries
-                        .write()
-                        .push(LogEntry::error("Select at least one allowed format."));
-                    return;
-                }
-
-                let convert_to = if auto_convert() && need_conversion() > 0 {
-                    let Some(idx) = convert_to_idx() else {
-                        log_entries.write().push(LogEntry::error(
-                            "Select a conversion target format.",
-                        ));
-                        return;
-                    };
-                    let fmt = FORMATS[idx].0;
-                    if !supported.contains(&fmt) {
-                        log_entries.write().push(LogEntry::error(
-                            "Conversion target must be one of the allowed formats.",
-                        ));
+                    if supported.is_empty() {
+                        log_entries
+                            .write()
+                            .push(LogEntry::error("Select at least one allowed format."));
                         return;
                     }
-                    Some(fmt)
-                } else {
-                    None
-                };
 
-                let config = sync::SyncConfig {
-                    supported_formats: supported,
-                    convert_to,
-                    jobs: jobs(),
-                };
-
-                let db = paths::db_path();
-                log_entries.write().clear();
-                progress_phase.set(String::new());
-                progress_current.set(0);
-                progress_total.set(0);
-                syncing.set(true);
-
-                spawn(async move {
-                    let (result_tx, result_rx) = tokio::sync::oneshot::channel();
-                    let (ptx, mut prx) = tokio::sync::mpsc::channel::<sync::SyncProgress>(64);
-
-                    std::thread::spawn(move || {
-                        let callback = move |p: sync::SyncProgress| {
-                            let _ = ptx.blocking_send(p);
+                    let convert_to = if auto_convert() && need_conversion() > 0 {
+                        let Some(idx) = convert_to_idx() else {
+                            log_entries.write().push(LogEntry::error(
+                                "Select a conversion target format.",
+                            ));
+                            return;
                         };
-                        let result = sync::sync(&db, &dest, &config, &callback);
-                        let _ = result_tx.send(result);
-                    });
+                        let fmt = FORMATS[idx].0;
+                        if !supported.contains(&fmt) {
+                            log_entries.write().push(LogEntry::error(
+                                "Conversion target must be one of the allowed formats.",
+                            ));
+                            return;
+                        }
+                        Some(fmt)
+                    } else {
+                        None
+                    };
 
-                    // Process progress updates until the channel closes.
-                    while let Some(p) = prx.recv().await {
-                        progress_phase.set(p.phase.to_string());
-                        progress_current.set(p.current);
-                        progress_total.set(p.total);
-                    }
+                    let config = sync::SyncConfig {
+                        supported_formats: supported,
+                        convert_to,
+                        jobs: jobs(),
+                    };
 
-                    match result_rx.await {
-                        Ok(Ok(result)) => {
-                            log_entries
-                                .write()
-                                .push(LogEntry::success(&result.to_string()));
-                            if result.converted > 0 {
-                                refresh_tracks(&mut tracks);
+                    let db = paths::db_path();
+                    log_entries.write().clear();
+                    progress_phase.set(String::new());
+                    progress_current.set(0);
+                    progress_total.set(0);
+                    syncing.set(true);
+
+                    spawn(async move {
+                        let (result_tx, result_rx) = tokio::sync::oneshot::channel();
+                        let (ptx, mut prx) = tokio::sync::mpsc::channel::<sync::SyncProgress>(64);
+
+                        std::thread::spawn(move || {
+                            let callback = move |p: sync::SyncProgress| {
+                                let _ = ptx.blocking_send(p);
+                            };
+                            let result = sync::sync(&db, &dest, &config, &callback);
+                            let _ = result_tx.send(result);
+                        });
+
+                        // Process progress updates until the channel closes.
+                        while let Some(p) = prx.recv().await {
+                            progress_phase.set(p.phase.to_string());
+                            progress_current.set(p.current);
+                            progress_total.set(p.total);
+                        }
+
+                        match result_rx.await {
+                            Ok(Ok(result)) => {
+                                log_entries
+                                    .write()
+                                    .push(LogEntry::success(&result.to_string()));
+                                if result.converted > 0 {
+                                    refresh_tracks(&mut tracks);
+                                }
+                                // Clear the push count.
+                                if let Some(mut s) = sync_status() {
+                                    s.to_push = 0;
+                                    sync_status.set(Some(s));
+                                }
+                            }
+                            Ok(Err(e)) => {
+                                log_entries
+                                    .write()
+                                    .push(LogEntry::error(&format!("Sync failed: {e}")));
+                            }
+                            Err(_) => {
+                                log_entries
+                                    .write()
+                                    .push(LogEntry::error("Sync thread panicked."));
                             }
                         }
-                        Ok(Err(e)) => {
-                            log_entries
-                                .write()
-                                .push(LogEntry::error(&format!("Sync failed: {e}")));
-                        }
-                        Err(_) => {
-                            log_entries
-                                .write()
-                                .push(LogEntry::error("Sync thread panicked."));
-                        }
-                    }
-                    syncing.set(false);
-                });
-            },
-            if syncing() { "Pushing..." } else { "Push" }
+                        syncing.set(false);
+                    });
+                },
+                if syncing() { "Pushing..." } else { "Push to device" }
+            }
         }
 
-        if syncing() && progress_total() > 0 {
+        if (syncing() || pulling()) && progress_total() > 0 {
             div { class: "progress-section",
                 p { class: "progress-label", "{progress_phase()}" }
                 div { class: "progress-bar",
@@ -990,6 +1078,9 @@ fn SyncTab(
                 }
             }
         }
+
+        } // modal-body
+        } // modal
     }
 }
 

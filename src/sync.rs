@@ -651,21 +651,37 @@ pub fn count_needing_conversion(
     Ok(count)
 }
 
-/// Count tracks that exist on the remote (USB) but not in the local library.
-pub fn count_remote_only(db_path: &Path, dest_dir: &Path) -> Result<u32, SyncError> {
+/// Counts of tracks that need pushing (local-only) and pulling (remote-only).
+#[derive(Clone, Copy, Default, PartialEq)]
+pub struct SyncStatus {
+    pub to_push: u32,
+    pub to_pull: u32,
+    pub has_remote_db: bool,
+}
+
+/// Check sync status for a destination: how many tracks to push and pull.
+pub fn check_sync_status(db_path: &Path, dest_dir: &Path) -> Result<SyncStatus, SyncError> {
     let local_db = Library::open(db_path)?;
+    let local_ids: HashSet<String> = local_db.get_track_ids()?.into_iter().collect();
+
     let Some(remote_db) = open_remote_db(dest_dir)? else {
-        return Ok(0);
+        return Ok(SyncStatus {
+            to_push: local_ids.len() as u32,
+            to_pull: 0,
+            has_remote_db: false,
+        });
     };
 
-    let local_ids: HashSet<String> = local_db.get_track_ids()?.into_iter().collect();
-    let remote_tracks = remote_db.get_all_tracks_with_files()?;
+    let remote_ids: HashSet<String> = remote_db.get_track_ids()?.into_iter().collect();
 
-    let count = remote_tracks
-        .iter()
-        .filter(|twf| !local_ids.contains(&twf.track.id))
-        .count() as u32;
-    Ok(count)
+    let to_push = local_ids.iter().filter(|id| !remote_ids.contains(*id)).count() as u32;
+    let to_pull = remote_ids.iter().filter(|id| !local_ids.contains(*id)).count() as u32;
+
+    Ok(SyncStatus {
+        to_push,
+        to_pull,
+        has_remote_db: true,
+    })
 }
 
 /// Import tracks from the remote (USB) into the local library.
