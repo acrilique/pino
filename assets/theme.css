@@ -1,0 +1,66 @@
+/*
+ * Pino Theme
+ *
+ * All app colors are defined here as CSS custom properties.
+ * Change these values to re-theme the entire app.
+ */
+
+:root {
+  /* ── Backgrounds ─────────────────────────────────────── */
+  --bg-body:              #0f1116;
+  --bg-surface:           #13151a;  /* log, modal, sync status */
+  --bg-input:             #1a1d24;  /* inputs, selects, table header */
+  --bg-elevated:          #1e2028;  /* buttons, borders as bg, format badges */
+  --bg-hover:             #282b34;  /* button hover, context item hover */
+  --bg-editing:           #151922;  /* active editing cell */
+
+  /* ── Borders ─────────────────────────────────────────── */
+  --border-default:       #2a2d34;
+  --border-subtle:        #1e2028;  /* inner dividers, section borders */
+  --border-hover:         #3a3d46;
+
+  /* ── Text ────────────────────────────────────────────── */
+  --text-primary:         #fff;
+  --text-body:            #e0e0e0;
+  --text-secondary:       #c5c5c5;
+  --text-muted:           #b7b7b7;  /* field labels */
+  --text-subtle:          #888;     /* table headers */
+  --text-dim:             #777;     /* subtitle, track count */
+  --text-faint:           #666;     /* modal close/refresh default */
+  --text-disabled:        #ccc;     /* checkbox label */
+  --text-placeholder:     #555;
+
+  /* ── Accent (Blue) ──────────────────────────────────── */
+  --accent:               #3b82f6;  /* focus rings, active sort, progress fill */
+  --accent-strong:        #2563eb;  /* primary action buttons */
+  --accent-hover:         #1d4ed8;  /* primary action hover */
+  --accent-light:         #60a5fa;  /* push icon */
+  --accent-bg:            #1e3a5f;  /* push icon bg */
+
+  /* ── Semantic: Success ──────────────────────────────── */
+  --success:              #4ade80;
+  --success-bg:           #0a1a10;
+  --success-border:       #16a34a22;
+
+  /* ── Semantic: Warning ─────────────────────────────── */
+  --warning:              #fbbf24;
+  --warning-bg:           #2a2008;
+  --warning-border:       #a16207;
+  --warning-border-alpha: #a1620744;
+
+  /* ── Semantic: Error ───────────────────────────────── */
+  --error:                #f87171;
+  --error-bg:             #1a0a0a;
+  --error-border:         #dc262622;
+  --error-hover-bg:       #2a1515;
+
+  /* ── Semantic: Info ────────────────────────────────── */
+  --info:                 #94a3b8;
+  --info-dim:             #64748b;  /* progress count */
+  --info-muted:           #b0b8c4;  /* status row text */
+
+  /* ── Overlays & Shadows ────────────────────────────── */
+  --overlay-backdrop:     rgba(0, 0, 0, 0.6);
+  --shadow-modal:         rgba(0, 0, 0, 0.5);
+  --shadow-context:       rgba(0, 0, 0, 0.4);
+}

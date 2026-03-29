@@ -5,8 +5,8 @@ html, body {
 }
 
 body {
-    background-color: #0f1116;
-    color: #e0e0e0;
+    background-color: var(--bg-body);
+    color: var(--text-body);
     font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
 }
 
@@ -19,11 +19,11 @@ h1 {
     font-size: 28px;
     font-weight: 700;
     margin-bottom: 2px;
-    color: #fff;
+    color: var(--text-primary);
 }
 
 .subtitle {
-    color: #777;
+    color: var(--text-dim);
     font-size: 14px;
     margin-bottom: 28px;
 }
@@ -36,7 +36,7 @@ h1 {
     display: block;
     font-size: 13px;
     font-weight: 600;
-    color: #b7b7b7;
+    color: var(--text-muted);
     margin-bottom: 6px;
 }
 
@@ -51,9 +51,9 @@ h1 {
 
 input[type="text"],
 select {
-    background: #1a1d24;
-    border: 1px solid #2a2d34;
-    color: #c5c5c5;
+    background: var(--bg-input);
+    border: 1px solid var(--border-default);
+    color: var(--text-secondary);
     padding: 8px 12px;
     border-radius: 6px;
     font-size: 14px;
@@ -64,11 +64,11 @@ select {
 
 input[type="text"]:focus,
 select:focus {
-    border-color: #3b82f6;
+    border-color: var(--accent);
 }
 
 input[type="text"]::placeholder {
-    color: #555;
+    color: var(--text-placeholder);
 }
 
 select {
@@ -76,9 +76,9 @@ select {
 }
 
 button {
-    background: #1e2028;
-    border: 1px solid #2a2d34;
-    color: #e0e0e0;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-default);
+    color: var(--text-body);
     padding: 8px 16px;
     border-radius: 6px;
     cursor: pointer;
@@ -87,14 +87,14 @@ button {
 }
 
 button:hover {
-    background: #282b34;
-    border-color: #3a3d46;
+    background: var(--bg-hover);
+    border-color: var(--border-hover);
 }
 
 .export-btn {
-    background: #2563eb;
-    border-color: #2563eb;
-    color: #fff;
+    background: var(--accent-strong);
+    border-color: var(--accent-strong);
+    color: var(--text-primary);
     width: 100%;
     padding: 12px;
     font-size: 15px;
@@ -104,7 +104,7 @@ button:hover {
 }
 
 .export-btn:hover {
-    background: #1d4ed8;
+    background: var(--accent-hover);
 }
 
 .export-btn:disabled {
@@ -113,7 +113,7 @@ button:hover {
 }
 
 .export-btn:disabled:hover {
-    background: #2563eb;
+    background: var(--accent-strong);
 }
 
 .formats {
@@ -128,18 +128,18 @@ button:hover {
     gap: 6px;
     font-size: 14px;
     cursor: pointer;
-    color: #ccc;
+    color: var(--text-disabled);
 }
 
 input[type="checkbox"] {
-    accent-color: #3b82f6;
+    accent-color: var(--accent);
     width: 16px;
     height: 16px;
 }
 
 .log {
-    background: #13151a;
-    border: 1px solid #1e2028;
+    background: var(--bg-surface);
+    border: 1px solid var(--border-subtle);
     border-radius: 8px;
     padding: 12px 16px;
     margin-top: 16px;
@@ -157,15 +157,15 @@ input[type="checkbox"] {
 }
 
 .log .error {
-    color: #f87171;
+    color: var(--error);
 }
 
 .log .success {
-    color: #4ade80;
+    color: var(--success);
 }
 
 .log .info {
-    color: #94a3b8;
+    color: var(--info);
 }
 
 .progress-section {
@@ -173,27 +173,27 @@ input[type="checkbox"] {
 }
 
 .progress-label {
-    color: #94a3b8;
+    color: var(--info);
     font-size: 13px;
     margin: 0 0 6px 0;
 }
 
 .progress-bar {
     height: 8px;
-    background: #1e2028;
+    background: var(--bg-elevated);
     border-radius: 4px;
     overflow: hidden;
 }
 
 .progress-fill {
     height: 100%;
-    background: #3b82f6;
+    background: var(--accent);
     border-radius: 4px;
     transition: width 0.15s ease;
 }
 
 .progress-count {
-    color: #64748b;
+    color: var(--info-dim);
     font-size: 12px;
     margin: 4px 0 0 0;
     text-align: right;
@@ -204,8 +204,8 @@ input[type="checkbox"] {
 }
 
 .sync-btn {
-    background: #2563eb;
-    color: #fff;
+    background: var(--accent-strong);
+    color: var(--text-primary);
     border: none;
     border-radius: 50%;
     width: 32px;
@@ -221,7 +221,7 @@ input[type="checkbox"] {
 }
 
 .sync-btn:hover {
-    background: #1d4ed8;
+    background: var(--accent-hover);
 }
 
 .modal-backdrop {
@@ -230,7 +230,7 @@ input[type="checkbox"] {
     left: 0;
     right: 0;
     bottom: 0;
-    background: rgba(0, 0, 0, 0.6);
+    background: var(--overlay-backdrop);
     z-index: 200;
 }
 
@@ -239,8 +239,8 @@ input[type="checkbox"] {
     top: 50%;
     left: 50%;
     transform: translate(-50%, -50%);
-    background: #13151a;
-    border: 1px solid #2a2d34;
+    background: var(--bg-surface);
+    border: 1px solid var(--border-default);
     border-radius: 12px;
     width: 520px;
     max-width: calc(100vw - 48px);
@@ -248,7 +248,7 @@ input[type="checkbox"] {
     z-index: 201;
     display: flex;
     flex-direction: column;
-    box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
+    box-shadow: 0 16px 48px var(--shadow-modal);
 }
 
 .modal-header {
@@ -256,7 +256,7 @@ input[type="checkbox"] {
     align-items: center;
     justify-content: space-between;
     padding: 16px 20px;
-    border-bottom: 1px solid #1e2028;
+    border-bottom: 1px solid var(--border-subtle);
     flex-shrink: 0;
 }
 
@@ -264,7 +264,7 @@ input[type="checkbox"] {
     margin: 0;
     font-size: 16px;
     font-weight: 600;
-    color: #fff;
+    color: var(--text-primary);
 }
 
 .modal-header-actions {
@@ -276,7 +276,7 @@ input[type="checkbox"] {
 .modal-refresh {
     background: none;
     border: none;
-    color: #666;
+    color: var(--text-faint);
     font-size: 18px;
     cursor: pointer;
     padding: 0;
@@ -290,8 +290,8 @@ input[type="checkbox"] {
 }
 
 .modal-refresh:hover {
-    background: #1e2028;
-    color: #e0e0e0;
+    background: var(--bg-elevated);
+    color: var(--text-body);
 }
 
 .modal-refresh:disabled {
@@ -302,7 +302,7 @@ input[type="checkbox"] {
 .modal-close {
     background: none;
     border: none;
-    color: #666;
+    color: var(--text-faint);
     font-size: 22px;
     cursor: pointer;
     padding: 0;
@@ -316,8 +316,8 @@ input[type="checkbox"] {
 }
 
 .modal-close:hover {
-    background: #1e2028;
-    color: #e0e0e0;
+    background: var(--bg-elevated);
+    color: var(--text-body);
 }
 
 .modal-close:disabled {
@@ -339,14 +339,14 @@ input[type="checkbox"] {
 }
 
 .track-count {
-    color: #777;
+    color: var(--text-dim);
     font-size: 13px;
     margin-left: auto;
 }
 
 .add-btn {
-    background: #2563eb;
-    color: #fff;
+    background: var(--accent-strong);
+    color: var(--text-primary);
     border: none;
     border-radius: 50%;
     width: 32px;
@@ -362,7 +362,7 @@ input[type="checkbox"] {
 }
 
 .add-btn:hover {
-    background: #1d4ed8;
+    background: var(--accent-hover);
 }
 
 .add-btn:disabled {
@@ -373,7 +373,7 @@ input[type="checkbox"] {
 .track-list {
     overflow-y: auto;
     overflow-x: hidden;
-    border: 1px solid #1e2028;
+    border: 1px solid var(--border-subtle);
     border-radius: 8px;
 }
 
@@ -385,8 +385,8 @@ input[type="checkbox"] {
 }
 
 .track-list thead th {
-    background: #1a1d24;
-    color: #888;
+    background: var(--bg-input);
+    color: var(--text-subtle);
     font-weight: 600;
     text-align: left;
     padding: 8px 10px;
@@ -401,11 +401,11 @@ input[type="checkbox"] {
 }
 
 .track-list thead th.sortable:hover {
-    color: #c5c5c5;
+    color: var(--text-secondary);
 }
 
 .track-list thead th.sortable.active {
-    color: #3b82f6;
+    color: var(--accent);
 }
 
 .sort-indicator {
@@ -425,12 +425,12 @@ input[type="checkbox"] {
 
 .col-resizer:hover,
 .col-resizer.active {
-    background: #3b82f6;
+    background: var(--accent);
 }
 
 .track-list tbody td {
     padding: 6px 10px;
-    border-top: 1px solid #1a1d24;
+    border-top: 1px solid var(--bg-input);
     line-height: 1.25;
     white-space: nowrap;
     overflow: hidden;
@@ -442,12 +442,12 @@ input[type="checkbox"] {
 }
 
 .track-list tbody td.editable-cell:hover {
-    background: #1e2028;
+    background: var(--bg-elevated);
 }
 
 .track-list tbody td.editing-cell {
     padding: 0;
-    background: #151922;
+    background: var(--bg-editing);
 }
 
 .cell-edit-input {
@@ -455,8 +455,8 @@ input[type="checkbox"] {
     -webkit-appearance: none;
     background: transparent;
     border: none;
-    box-shadow: inset 0 -1px 0 #3b82f6;
-    color: #e0e0e0;
+    box-shadow: inset 0 -1px 0 var(--accent);
+    color: var(--text-body);
     padding: 6px 10px;
     margin: 0;
     display: block;
@@ -472,7 +472,7 @@ input[type="checkbox"] {
 }
 
 .track-list tbody tr:hover {
-    background: #1a1d24;
+    background: var(--bg-input);
 }
 
 .formats-cell {
@@ -482,24 +482,24 @@ input[type="checkbox"] {
 }
 
 .format-badge {
-    background: #1e2028;
-    border: 1px solid #2a2d34;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-default);
     border-radius: 4px;
     padding: 1px 6px;
     font-size: 11px;
     font-weight: 600;
-    color: #94a3b8;
+    color: var(--info);
     text-transform: uppercase;
 }
 
 .warning {
-    background: #2a2008;
-    border: 1px solid #a16207;
+    background: var(--warning-bg);
+    border: 1px solid var(--warning-border);
     border-radius: 8px;
     padding: 12px 16px;
     margin-bottom: 16px;
     font-size: 13px;
-    color: #fbbf24;
+    color: var(--warning);
 }
 
 .warning p {
@@ -509,7 +509,7 @@ input[type="checkbox"] {
 .convert-section {
     margin-top: 20px;
     padding-top: 16px;
-    border-top: 1px solid #1e2028;
+    border-top: 1px solid var(--border-subtle);
 }
 
 .context-overlay {
@@ -523,13 +523,13 @@ input[type="checkbox"] {
 
 .context-menu {
     position: absolute;
-    background: #1a1d24;
-    border: 1px solid #2a2d34;
+    background: var(--bg-input);
+    border: 1px solid var(--border-default);
     border-radius: 6px;
     padding: 4px;
     z-index: 100;
     min-width: 160px;
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+    box-shadow: 0 4px 12px var(--shadow-context);
 }
 
 .context-item {
@@ -538,7 +538,7 @@ input[type="checkbox"] {
     text-align: left;
     background: none;
     border: none;
-    color: #e0e0e0;
+    color: var(--text-body);
     padding: 6px 12px;
     font-size: 13px;
     border-radius: 4px;
@@ -546,20 +546,20 @@ input[type="checkbox"] {
 }
 
 .context-item:hover {
-    background: #282b34;
+    background: var(--bg-hover);
 }
 
 .context-item.danger {
-    color: #f87171;
+    color: var(--error);
 }
 
 .context-item.danger:hover {
-    background: #2a1515;
+    background: var(--error-hover-bg);
 }
 
 .sync-status {
-    background: #13151a;
-    border: 1px solid #1e2028;
+    background: var(--bg-surface);
+    border: 1px solid var(--border-subtle);
     border-radius: 8px;
     padding: 14px 16px;
     margin-bottom: 16px;
@@ -586,23 +586,23 @@ input[type="checkbox"] {
 }
 
 .sync-status.checking {
-    color: #94a3b8;
+    color: var(--info);
 }
 
 .sync-status.error-status {
-    color: #f87171;
-    border-color: #dc262622;
-    background: #1a0a0a;
+    color: var(--error);
+    border-color: var(--error-border);
+    background: var(--error-bg);
 }
 
 .sync-status.error-status .status-icon {
-    background: #dc262622;
-    color: #f87171;
+    background: var(--error-border);
+    color: var(--error);
 }
 
 .sync-status.checking .status-icon {
-    background: #1e2028;
-    color: #94a3b8;
+    background: var(--bg-elevated);
+    color: var(--info);
     animation: spin 1.2s linear infinite;
 }
 
@@ -612,14 +612,14 @@ input[type="checkbox"] {
 }
 
 .sync-status.up-to-date {
-    color: #4ade80;
-    border-color: #16a34a22;
-    background: #0a1a10;
+    color: var(--success);
+    border-color: var(--success-border);
+    background: var(--success-bg);
 }
 
 .sync-status.up-to-date .status-icon {
-    background: #16a34a22;
-    color: #4ade80;
+    background: var(--success-border);
+    color: var(--success);
 }
 
 .sync-status.has-changes {
@@ -638,21 +638,21 @@ input[type="checkbox"] {
 }
 
 .status-row + .status-row {
-    border-top: 1px solid #1e2028;
+    border-top: 1px solid var(--border-subtle);
 }
 
 .status-row .status-icon.push {
-    background: #1e3a5f;
-    color: #60a5fa;
+    background: var(--accent-bg);
+    color: var(--accent-light);
 }
 
 .status-row .status-icon.pull {
-    background: #2a2008;
-    color: #fbbf24;
+    background: var(--warning-bg);
+    color: var(--warning);
 }
 
 .status-row p {
-    color: #b0b8c4;
+    color: var(--info-muted);
 }
 
 .pull-section {
@@ -660,9 +660,9 @@ input[type="checkbox"] {
 }
 
 .pull-btn {
-    background: #1e2028;
-    border: 1px solid #a1620744;
-    color: #fbbf24;
+    background: var(--bg-elevated);
+    border: 1px solid var(--warning-border-alpha);
+    color: var(--warning);
     width: 100%;
     padding: 12px;
     font-size: 15px;
@@ -671,8 +671,8 @@ input[type="checkbox"] {
 }
 
 .pull-btn:hover {
-    background: #2a2008;
-    border-color: #a16207;
+    background: var(--warning-bg);
+    border-color: var(--warning-border);
 }
 
 .pull-btn:disabled {
@@ -681,5 +681,5 @@ input[type="checkbox"] {
 }
 
 .pull-btn:disabled:hover {
-    background: #1e2028;
+    background: var(--bg-elevated);
 }

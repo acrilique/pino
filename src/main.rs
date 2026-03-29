@@ -171,7 +171,8 @@ fn save_dest_dir(dir: &str) {
 
 fn main() {
     let custom_head = format!(
-        "<style>{}</style><style>{}</style><style>{}</style><style>{}</style>",
+        "<style>{}</style><style>{}</style><style>{}</style><style>{}</style><style>{}</style>",
+        include_str!("../assets/theme.css"),
         include_str!("../assets/main.css"),
         include_str!("../assets/dx-components-theme.css"),
         include_str!("components/input/style.css"),
