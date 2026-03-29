@@ -23,7 +23,7 @@ h1 {
 }
 
 .subtitle {
-    color: var(--text-dim);
+    color: var(--text-subtle);
     font-size: 14px;
     margin-bottom: 28px;
 }
@@ -51,7 +51,7 @@ h1 {
 
 input[type="text"],
 select {
-    background: var(--bg-input);
+    background: var(--bg-elevated);
     border: 1px solid var(--border-default);
     color: var(--text-secondary);
     padding: 8px 12px;
@@ -128,7 +128,7 @@ button:hover {
     gap: 6px;
     font-size: 14px;
     cursor: pointer;
-    color: var(--text-disabled);
+    color: var(--text-secondary);
 }
 
 input[type="checkbox"] {
@@ -248,7 +248,7 @@ input[type="checkbox"] {
     z-index: 201;
     display: flex;
     flex-direction: column;
-    box-shadow: 0 16px 48px var(--shadow-modal);
+    box-shadow: 0 16px 48px var(--shadow);
 }
 
 .modal-header {
@@ -339,7 +339,7 @@ input[type="checkbox"] {
 }
 
 .track-count {
-    color: var(--text-dim);
+    color: var(--text-subtle);
     font-size: 13px;
     margin-left: auto;
 }
@@ -385,7 +385,7 @@ input[type="checkbox"] {
 }
 
 .track-list thead th {
-    background: var(--bg-input);
+    background: var(--bg-elevated);
     color: var(--text-subtle);
     font-weight: 600;
     text-align: left;
@@ -430,7 +430,7 @@ input[type="checkbox"] {
 
 .track-list tbody td {
     padding: 6px 10px;
-    border-top: 1px solid var(--bg-input);
+    border-top: 1px solid var(--bg-elevated);
     line-height: 1.25;
     white-space: nowrap;
     overflow: hidden;
@@ -447,7 +447,7 @@ input[type="checkbox"] {
 
 .track-list tbody td.editing-cell {
     padding: 0;
-    background: var(--bg-editing);
+    background: var(--bg-surface);
 }
 
 .cell-edit-input {
@@ -472,7 +472,7 @@ input[type="checkbox"] {
 }
 
 .track-list tbody tr:hover {
-    background: var(--bg-input);
+    background: var(--bg-elevated);
 }
 
 .formats-cell {
@@ -523,13 +523,13 @@ input[type="checkbox"] {
 
 .context-menu {
     position: absolute;
-    background: var(--bg-input);
+    background: var(--bg-elevated);
     border: 1px solid var(--border-default);
     border-radius: 6px;
     padding: 4px;
     z-index: 100;
     min-width: 160px;
-    box-shadow: 0 4px 12px var(--shadow-context);
+    box-shadow: 0 4px 12px var(--shadow);
 }
 
 .context-item {
@@ -652,7 +652,7 @@ input[type="checkbox"] {
 }
 
 .status-row p {
-    color: var(--info-muted);
+    color: var(--info);
 }
 
 .pull-section {

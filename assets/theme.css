@@ -8,11 +8,9 @@
 :root {
   /* ── Backgrounds ─────────────────────────────────────── */
   --bg-body:              #0f1116;
-  --bg-surface:           #13151a;  /* log, modal, sync status */
-  --bg-input:             #1a1d24;  /* inputs, selects, table header */
-  --bg-elevated:          #1e2028;  /* buttons, borders as bg, format badges */
+  --bg-surface:           #13151a;  /* panels: log, modal, sync status */
+  --bg-elevated:          #1e2028;  /* interactive: inputs, buttons, badges */
   --bg-hover:             #282b34;  /* button hover, context item hover */
-  --bg-editing:           #151922;  /* active editing cell */
 
   /* ── Borders ─────────────────────────────────────────── */
   --border-default:       #2a2d34;
@@ -24,10 +22,8 @@
   --text-body:            #e0e0e0;
   --text-secondary:       #c5c5c5;
   --text-muted:           #b7b7b7;  /* field labels */
-  --text-subtle:          #888;     /* table headers */
-  --text-dim:             #777;     /* subtitle, track count */
+  --text-subtle:          #888;     /* table headers, subtitle, track count */
   --text-faint:           #666;     /* modal close/refresh default */
-  --text-disabled:        #ccc;     /* checkbox label */
   --text-placeholder:     #555;
 
   /* ── Accent (Blue) ──────────────────────────────────── */
@@ -55,12 +51,10 @@
   --error-hover-bg:       #2a1515;
 
   /* ── Semantic: Info ────────────────────────────────── */
-  --info:                 #94a3b8;
+  --info:                 #94a3b8;  /* also status row text */
   --info-dim:             #64748b;  /* progress count */
-  --info-muted:           #b0b8c4;  /* status row text */
 
   /* ── Overlays & Shadows ────────────────────────────── */
   --overlay-backdrop:     rgba(0, 0, 0, 0.6);
-  --shadow-modal:         rgba(0, 0, 0, 0.5);
-  --shadow-context:       rgba(0, 0, 0, 0.4);
+  --shadow:               rgba(0, 0, 0, 0.5);
 }
