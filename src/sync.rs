@@ -292,158 +292,21 @@ pub fn import_folder(db_path: &Path, input_dir: &Path) -> Result<u32, SyncError>
     Ok(imported)
 }
 
-/// Convert specific tracks in the local library to a target format.
-///
-/// For each track, takes the first available file and converts it. The converted file is saved
-/// in `~/.local/share/pino/converted/` and registered in the local DB. Conversions run in
-/// parallel using the given number of worker threads.
-///
-/// Returns the number of successfully converted tracks.
-pub fn convert_tracks(
-    db_path: &Path,
-    track_ids: &[String],
-    target: SupportedFormat,
-    jobs: usize,
-    on_progress: &(dyn Fn(SyncProgress) + Sync),
-) -> Result<u32, SyncError> {
-    if !ffmpeg::check_available() {
-        return Err(SyncError::FfmpegNotFound);
-    }
-
-    let db = Library::open(db_path)?;
-    let conv_dir = converted_dir();
-    std::fs::create_dir_all(&conv_dir)?;
-
-    let target_ext: &str = target.into();
-
-    // === Preparation: gather work items ===
-    struct ConvertItem {
-        track_id: String,
-        src_path: PathBuf,
-        dest_path: PathBuf,
-        src_sample_rate: u32,
-        src_bitrate: u32,
-    }
-
-    let mut items: Vec<ConvertItem> = Vec::new();
-    let mut claimed_paths: HashSet<PathBuf> = HashSet::new();
-
-    for track_id in track_ids {
-        let files = db.get_files_for_track(track_id)?;
-
-        if files.iter().any(|f| f.format == target_ext) {
-            continue;
-        }
-
-        let Some(source) = files.first() else {
-            continue;
-        };
-        let src_path = PathBuf::from(&source.file_path);
-        if !src_path.exists() {
-            eprintln!("  Warning: source file not found: {}", source.file_path);
-            continue;
-        }
-
-        let stem = file_stem_string(&src_path);
-        let base = conv_dir.join(format!("{stem}.{target_ext}"));
-        let dest_path = unique_path_batch(&base, &mut claimed_paths);
-
-        items.push(ConvertItem {
-            track_id: track_id.clone(),
-            src_path,
-            dest_path,
-            src_sample_rate: source.sample_rate,
-            src_bitrate: source.bitrate,
-        });
-    }
-
-    if items.is_empty() {
-        return Ok(0);
-    }
-
-    // === Conversion: parallel ffmpeg ===
-    let conv_jobs: Vec<ConvertJob> = items
-        .iter()
-        .map(|item| ConvertJob {
-            src: &item.src_path,
-            dest: &item.dest_path,
-            format: target,
-        })
-        .collect();
-    let convert_ok = run_conversions(&conv_jobs, jobs, on_progress);
-
-    // === Register results (sequential DB writes) ===
-    let today = today();
-    let mut converted = 0u32;
-
-    for (i, item) in items.iter().enumerate() {
-        if !convert_ok[i] {
-            continue;
-        }
-
-        let (_, sample_rate, bitrate) =
-            read_audio_properties(&item.dest_path, 0, item.src_sample_rate, item.src_bitrate);
-        let file_size = file_size_on_disk(&item.dest_path);
-
-        let file = TrackFile {
-            id: new_id(),
-            track_id: item.track_id.clone(),
-            format: target_ext.to_string(),
-            file_path: item.dest_path.to_string_lossy().to_string(),
-            file_size,
-            sample_rate,
-            bitrate,
-            added_at: today.clone(),
-        };
-
-        if let Err(e) = db.add_file(&file) {
-            eprintln!("  Warning: failed to register converted file: {e}");
-            continue;
-        }
-        converted += 1;
-    }
-
-    Ok(converted)
+struct PreparedItem<'a> {
+    track: &'a Track,
+    src_file: &'a TrackFile,
+    src_path: PathBuf,
+    dest_filename: String,
+    dest_format: SupportedFormat,
+    needs_conversion: bool,
+    local_conv_path: PathBuf,
 }
 
-/// Synchronize local library to a remote destination (additive-only).
-///
-/// Runs in three phases:
-/// 1. **Converting files** — parallel conversion for tracks without a matching format.
-/// 2. **Copying files** — sequential copy to destination + register in remote DB.
-/// 3. **Writing database** — generate the Pioneer PDB.
-pub fn sync(
-    db_path: &Path,
-    dest_dir: &Path,
-    config: &SyncConfig,
-    on_progress: &(dyn Fn(SyncProgress) + Sync),
-) -> Result<SyncResult, SyncError> {
-    if config.convert_to.is_some() && !ffmpeg::check_available() {
-        return Err(SyncError::FfmpegNotFound);
-    }
-
-    let local_db = Library::open(db_path)?;
-
-    let rdb_path = remote_db_path(dest_dir);
-    if let Some(parent) = rdb_path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    let remote_db = Library::open(&rdb_path)?;
-
-    let contents_dir = dest_dir.join("Contents");
-    std::fs::create_dir_all(&contents_dir)?;
-
-    let local_tracks = local_db.get_all_tracks_with_files()?;
-    let remote_ids: std::collections::HashSet<String> =
-        remote_db.get_track_ids()?.into_iter().collect();
-
-    let to_sync: Vec<&TrackWithFiles> = local_tracks
-        .iter()
-        .filter(|t| !remote_ids.contains(&t.track.id))
-        .collect();
-
-    // === Metadata Update Phase ===
-    // For tracks already on the remote, push any local metadata changes.
+/// Push local metadata changes to tracks already on the remote.
+fn update_remote_metadata(
+    local_tracks: &[TrackWithFiles],
+    remote_db: &Library,
+) -> Result<u32, SyncError> {
     let remote_tracks = remote_db.get_all_tracks_with_files()?;
     let remote_by_id: HashMap<&str, &Track> = remote_tracks
         .iter()
@@ -451,7 +314,7 @@ pub fn sync(
         .collect();
 
     let mut updated = 0u32;
-    for local_twf in &local_tracks {
+    for local_twf in local_tracks {
         let local = &local_twf.track;
         if let Some(remote) = remote_by_id.get(local.id.as_str())
             && (local.title != remote.title
@@ -471,37 +334,22 @@ pub fn sync(
             updated += 1;
         }
     }
+    Ok(updated)
+}
 
-    if to_sync.is_empty() {
-        generate_pdb(&remote_db, dest_dir)?;
-        return Ok(SyncResult {
-            synced: 0,
-            converted: 0,
-            skipped: 0,
-            updated,
-        });
-    }
-
-    let mut used_filenames = remote_db.used_filenames()?;
-    let conv_dir = converted_dir();
-    std::fs::create_dir_all(&conv_dir)?;
-
-    // === Preparation Phase ===
-    struct PreparedItem<'a> {
-        track: &'a Track,
-        src_file: &'a TrackFile,
-        src_path: PathBuf,
-        dest_filename: String,
-        dest_format: SupportedFormat,
-        needs_conversion: bool,
-        local_conv_path: PathBuf,
-    }
-
+/// For each track to sync, pick the best source file, assign a destination filename,
+/// and determine whether a conversion is needed.
+fn prepare_sync_items<'a>(
+    to_sync: &[&'a TrackWithFiles],
+    config: &SyncConfig,
+    used_filenames: &mut HashMap<String, u32>,
+    conv_dir: &Path,
+) -> (Vec<PreparedItem<'a>>, u32) {
     let mut prepared: Vec<PreparedItem> = Vec::new();
     let mut skipped = 0u32;
     let mut claimed_conv_paths: HashSet<PathBuf> = HashSet::new();
 
-    for twf in &to_sync {
+    for twf in to_sync {
         let track = &twf.track;
 
         let matching_file = find_file_in_formats(&twf.files, &config.supported_formats);
@@ -559,7 +407,17 @@ pub fn sync(
         });
     }
 
-    // === Conversion Phase (parallel) ===
+    (prepared, skipped)
+}
+
+/// Run parallel ffmpeg conversions for items that need them.
+///
+/// Returns a per-item boolean indicating whether the conversion succeeded.
+fn convert_prepared_items(
+    prepared: &[PreparedItem],
+    jobs: usize,
+    on_progress: &(dyn Fn(SyncProgress) + Sync),
+) -> Vec<bool> {
     let items_to_convert: Vec<usize> = prepared
         .iter()
         .enumerate()
@@ -574,17 +432,30 @@ pub fn sync(
             format: prepared[i].dest_format,
         })
         .collect();
-    let conv_results = run_conversions(&conv_jobs, config.jobs, on_progress);
+    let conv_results = run_conversions(&conv_jobs, jobs, on_progress);
     let mut convert_ok = vec![false; prepared.len()];
     for (job_idx, &prep_idx) in items_to_convert.iter().enumerate() {
         convert_ok[prep_idx] = conv_results[job_idx];
     }
+    convert_ok
+}
 
-    // === Copy Phase (sequential) ===
+/// Copy (or move converted) files to the destination and register them in both databases.
+///
+/// Returns `(synced, converted, skipped)`.
+fn copy_to_destination(
+    prepared: &[PreparedItem],
+    convert_ok: &[bool],
+    contents_dir: &Path,
+    local_db: &Library,
+    remote_db: &Library,
+    on_progress: &(dyn Fn(SyncProgress) + Sync),
+) -> (u32, u32, u32) {
     let today = today();
     let copy_total = prepared.len() as u32;
     let mut synced = 0u32;
     let mut converted = 0u32;
+    let mut skipped = 0u32;
 
     for (i, item) in prepared.iter().enumerate() {
         on_progress(SyncProgress {
@@ -678,6 +549,74 @@ pub fn sync(
 
         synced += 1;
     }
+
+    (synced, converted, skipped)
+}
+
+/// Synchronize local library to a remote destination (additive-only).
+///
+/// Runs in four phases:
+/// 1. **Metadata update** — push local metadata changes to tracks already on the remote.
+/// 2. **Converting files** — parallel conversion for tracks without a matching format.
+/// 3. **Copying files** — sequential copy to destination + register in remote DB.
+/// 4. **Writing database** — generate the Pioneer PDB.
+pub fn sync(
+    db_path: &Path,
+    dest_dir: &Path,
+    config: &SyncConfig,
+    on_progress: &(dyn Fn(SyncProgress) + Sync),
+) -> Result<SyncResult, SyncError> {
+    if config.convert_to.is_some() && !ffmpeg::check_available() {
+        return Err(SyncError::FfmpegNotFound);
+    }
+
+    let local_db = Library::open(db_path)?;
+
+    let rdb_path = remote_db_path(dest_dir);
+    if let Some(parent) = rdb_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let remote_db = Library::open(&rdb_path)?;
+
+    let contents_dir = dest_dir.join("Contents");
+    std::fs::create_dir_all(&contents_dir)?;
+
+    let local_tracks = local_db.get_all_tracks_with_files()?;
+    let remote_ids: HashSet<String> = remote_db.get_track_ids()?.into_iter().collect();
+
+    let to_sync: Vec<&TrackWithFiles> = local_tracks
+        .iter()
+        .filter(|t| !remote_ids.contains(&t.track.id))
+        .collect();
+
+    let updated = update_remote_metadata(&local_tracks, &remote_db)?;
+
+    if to_sync.is_empty() {
+        generate_pdb(&remote_db, dest_dir)?;
+        return Ok(SyncResult {
+            synced: 0,
+            converted: 0,
+            skipped: 0,
+            updated,
+        });
+    }
+
+    let mut used_filenames = remote_db.used_filenames()?;
+    let conv_dir = converted_dir();
+    std::fs::create_dir_all(&conv_dir)?;
+
+    let (prepared, mut skipped) =
+        prepare_sync_items(&to_sync, config, &mut used_filenames, &conv_dir);
+    let convert_ok = convert_prepared_items(&prepared, config.jobs, on_progress);
+    let (synced, converted, copy_skipped) = copy_to_destination(
+        &prepared,
+        &convert_ok,
+        &contents_dir,
+        &local_db,
+        &remote_db,
+        on_progress,
+    );
+    skipped += copy_skipped;
 
     // === PDB Phase ===
     on_progress(SyncProgress {

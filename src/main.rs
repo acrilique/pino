@@ -127,10 +127,7 @@ fn App() -> Element {
     let mut tracks = use_signal(Vec::<db::TrackWithFiles>::new);
 
     // Library tab state.
-    let scan_dir = use_signal(String::new);
     let scanning = use_signal(|| false);
-    let lib_convert_to_idx = use_signal(|| None::<usize>);
-    let converting = use_signal(|| false);
     let lib_log_entries = use_signal(Vec::<LogEntry>::new);
     let sort_key = use_signal(|| SortKey::Artist);
     let sort_order = use_signal(|| SortOrder::Asc);
@@ -214,10 +211,7 @@ fn App() -> Element {
                 Tab::Library => rsx! {
                     LibraryTab {
                         tracks,
-                        scan_dir,
                         scanning,
-                        convert_to_idx: lib_convert_to_idx,
-                        converting,
                         log_entries: lib_log_entries,
                         sort_key,
                         sort_order,
@@ -265,10 +259,7 @@ fn refresh_tracks(tracks: &mut Signal<Vec<db::TrackWithFiles>>) {
 #[component]
 fn LibraryTab(
     mut tracks: Signal<Vec<db::TrackWithFiles>>,
-    scan_dir: Signal<String>,
     mut scanning: Signal<bool>,
-    mut convert_to_idx: Signal<Option<usize>>,
-    mut converting: Signal<bool>,
     mut log_entries: Signal<Vec<LogEntry>>,
     sort_key: Signal<SortKey>,
     sort_order: Signal<SortOrder>,
@@ -358,125 +349,49 @@ fn LibraryTab(
 
     rsx! {
         div { class: "tab-content",
-            DirField {
-            label: "Folder to import".to_string(),
-            value: scan_dir,
-            placeholder: "/path/to/music".to_string(),
-        }
 
-        button {
-            class: "export-btn",
-            disabled: scanning() || scan_dir().is_empty(),
-            onclick: move |_| {
-                let input = PathBuf::from(scan_dir());
-                let db = paths::db_path();
-                scanning.set(true);
-                log_entries.write().clear();
-                log_entries.write().push(LogEntry::info("Scanning..."));
-
-                spawn(async move {
-                    let (tx, rx) = tokio::sync::oneshot::channel();
-                    std::thread::spawn(move || {
-                        let _ = tx.send(sync::import_folder(&db, &input));
-                    });
-                    match rx.await {
-                        Ok(Ok(n)) => {
-                            log_entries.write().push(LogEntry::success(
-                                &format!("Imported {n} new track(s)."),
-                            ));
-                            refresh_tracks(&mut tracks);
-                        }
-                        Ok(Err(e)) => {
-                            log_entries.write().push(LogEntry::error(
-                                &format!("Import failed: {e}"),
-                            ));
-                        }
-                        Err(_) => {
-                            log_entries.write().push(LogEntry::error("Import thread panicked."));
-                        }
-                    }
-                    scanning.set(false);
-                });
-            },
-            if scanning() { "Scanning..." } else { "Import" }
-        }
-
-        // Conversion section.
-        div { class: "field convert-section",
-            label { "Convert all tracks to" }
-            div { class: "dir-row",
-                Select::<usize> {
-                    on_value_change: move |val: Option<usize>| {
-                        convert_to_idx.set(val);
-                    },
-                    SelectTrigger {
-                        {format_label(convert_to_idx())}
-                    }
-                    SelectList {
-                        for (i, (_, name)) in FORMATS.iter().enumerate() {
-                            SelectOption::<usize> {
-                                value: i,
-                                index: i,
-                                text_value: name.to_string(),
-                                "{name}"
-                            }
-                        }
-                    }
-                }
-                button {
-                    disabled: converting() || convert_to_idx().is_none() || tracks.read().is_empty(),
-                    onclick: move |_| {
-                        let Some(idx) = convert_to_idx() else { return };
-                        let target = FORMATS[idx].0;
+        div { class: "library-header",
+            button {
+                class: "add-btn",
+                title: "Import tracks",
+                disabled: scanning(),
+                onclick: move |_| {
+                    spawn(async move {
+                        let Some(folder) = rfd::AsyncFileDialog::new().pick_folder().await else {
+                            return;
+                        };
+                        let input = folder.path().to_path_buf();
                         let db = paths::db_path();
-                        let track_ids: Vec<String> = tracks
-                            .read()
-                            .iter()
-                            .map(|twf| twf.track.id.clone())
-                            .collect();
-
-                        converting.set(true);
+                        scanning.set(true);
                         log_entries.write().clear();
-                        log_entries.write().push(LogEntry::info("Converting..."));
+                        log_entries.write().push(LogEntry::info("Scanning..."));
 
-                        spawn(async move {
-                            let (tx, rx) = tokio::sync::oneshot::channel();
-                            std::thread::spawn(move || {
-                                let num_cpus = std::thread::available_parallelism()
-                                    .map(|n| n.get())
-                                    .unwrap_or(4);
-                                let _ = tx.send(sync::convert_tracks(
-                                    &db,
-                                    &track_ids,
-                                    target,
-                                    num_cpus,
-                                    &|_| {},
-                                ));
-                            });
-                            match rx.await {
-                                Ok(Ok(n)) => {
-                                    log_entries.write().push(LogEntry::success(
-                                        &format!("Converted {n} track(s)."),
-                                    ));
-                                    refresh_tracks(&mut tracks);
-                                }
-                                Ok(Err(e)) => {
-                                    log_entries.write().push(LogEntry::error(
-                                        &format!("Conversion failed: {e}"),
-                                    ));
-                                }
-                                Err(_) => {
-                                    log_entries
-                                        .write()
-                                        .push(LogEntry::error("Conversion thread panicked."));
-                                }
-                            }
-                            converting.set(false);
+                        let (tx, rx) = tokio::sync::oneshot::channel();
+                        std::thread::spawn(move || {
+                            let _ = tx.send(sync::import_folder(&db, &input));
                         });
-                    },
-                    if converting() { "Converting..." } else { "Convert" }
-                }
+                        match rx.await {
+                            Ok(Ok(n)) => {
+                                log_entries.write().push(LogEntry::success(
+                                    &format!("Imported {n} new track(s)."),
+                                ));
+                                refresh_tracks(&mut tracks);
+                            }
+                            Ok(Err(e)) => {
+                                log_entries.write().push(LogEntry::error(
+                                    &format!("Import failed: {e}"),
+                                ));
+                            }
+                            Err(_) => {
+                                log_entries.write().push(LogEntry::error("Import thread panicked."));
+                            }
+                        }
+                        scanning.set(false);
+                    });
+                },
+                if scanning() { "..." } else { "+" }
             }
+            p { class: "track-count", "{tracks.read().len()} track(s) in library" }
         }
 
         if !log_entries.read().is_empty() {
@@ -486,8 +401,6 @@ fn LibraryTab(
                 }
             }
         }
-
-        p { class: "track-count", "{tracks.read().len()} track(s) in library" }
 
         if !tracks.read().is_empty() {
             div {

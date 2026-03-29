@@ -254,17 +254,6 @@ impl Library {
         Ok(ids)
     }
 
-    pub fn get_files_for_track(&self, track_id: &str) -> rusqlite::Result<Vec<TrackFile>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT id, track_id, format, file_path, file_size, sample_rate, bitrate, added_at
-             FROM files WHERE track_id = ?1",
-        )?;
-        let files = stmt
-            .query_map(params![track_id], track_file_from_row)?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
-        Ok(files)
-    }
-
     pub fn has_file_path(&self, path: &str) -> rusqlite::Result<bool> {
         let count: u32 = self.conn.query_row(
             "SELECT COUNT(*) FROM files WHERE file_path = ?1",
