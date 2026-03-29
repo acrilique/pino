@@ -219,13 +219,7 @@ fn run_conversions(
 pub fn import_folder(db_path: &Path, input_dir: &Path) -> Result<u32, SyncError> {
     let db = Library::open(db_path)?;
 
-    let all_formats = vec![
-        SupportedFormat::Mp3,
-        SupportedFormat::Wav,
-        SupportedFormat::Aiff,
-        SupportedFormat::M4a,
-        SupportedFormat::Flac,
-    ];
+    let all_formats = SupportedFormat::ALL.to_vec();
     let mut audio_files = Vec::new();
     scan::find_audio_files(input_dir, &all_formats, true, &mut audio_files)?;
     audio_files.sort_by(|(a, _), (b, _)| a.cmp(b));
@@ -251,18 +245,17 @@ pub fn import_folder(db_path: &Path, input_dir: &Path) -> Result<u32, SyncError>
                 .to_ascii_lowercase(),
         };
 
-        let (title, artist, album, duration_secs, sample_rate, bitrate) =
-            read_metadata(src_path, &original_stem);
+        let meta = read_metadata(src_path, &original_stem);
 
         let file_size = file_size_on_disk(src_path);
 
         let track_id = new_id();
         let track = Track {
             id: track_id.clone(),
-            title,
-            artist,
-            album,
-            duration_secs,
+            title: meta.title,
+            artist: meta.artist,
+            album: meta.album,
+            duration_secs: meta.duration_secs,
             tempo: 0,
             added_at: today.clone(),
         };
@@ -273,8 +266,8 @@ pub fn import_folder(db_path: &Path, input_dir: &Path) -> Result<u32, SyncError>
             format: format_str,
             file_path: path_str,
             file_size,
-            sample_rate,
-            bitrate,
+            sample_rate: meta.sample_rate,
+            bitrate: meta.bitrate,
             added_at: today.clone(),
         };
 
@@ -474,14 +467,13 @@ fn copy_to_destination(
                 continue;
             }
 
-            let (_, sr, br) = read_audio_properties(
+            let conv_meta = read_audio_properties(
                 &item.local_conv_path,
-                0,
                 item.src_file.sample_rate,
                 item.src_file.bitrate,
             );
-            sample_rate = sr;
-            bitrate = br;
+            sample_rate = conv_meta.sample_rate;
+            bitrate = conv_meta.bitrate;
 
             // Register converted file in local DB.
             let local_file = TrackFile {
@@ -814,8 +806,17 @@ fn unique_path_batch(path: &Path, claimed: &mut HashSet<PathBuf>) -> PathBuf {
     }
 }
 
+struct AudioMeta {
+    title: String,
+    artist: String,
+    album: String,
+    duration_secs: u16,
+    sample_rate: u32,
+    bitrate: u32,
+}
+
 /// Read audio metadata from a file (lofty with ffprobe fallback).
-fn read_metadata(path: &Path, fallback_title: &str) -> (String, String, String, u16, u32, u32) {
+fn read_metadata(path: &Path, fallback_title: &str) -> AudioMeta {
     match lofty::read_from_path(path) {
         Ok(tagged_file) => {
             let tag = tagged_file
@@ -833,11 +834,15 @@ fn read_metadata(path: &Path, fallback_title: &str) -> (String, String, String, 
                 .unwrap_or_default();
 
             let properties = tagged_file.properties();
-            let duration_secs = properties.duration().as_secs() as u16;
-            let sample_rate = properties.sample_rate().unwrap_or(44100);
-            let bitrate = properties.overall_bitrate().unwrap_or(320);
 
-            (title, artist, album, duration_secs, sample_rate, bitrate)
+            AudioMeta {
+                title,
+                artist,
+                album,
+                duration_secs: properties.duration().as_secs() as u16,
+                sample_rate: properties.sample_rate().unwrap_or(44100),
+                bitrate: properties.overall_bitrate().unwrap_or(320),
+            }
         }
         Err(e) => {
             let filename = path.file_name().unwrap_or_default().to_string_lossy();
@@ -845,25 +850,25 @@ fn read_metadata(path: &Path, fallback_title: &str) -> (String, String, String, 
             match ffmpeg::probe_metadata(path) {
                 Some(meta) => {
                     eprintln!("    Using ffprobe metadata fallback");
-                    (
-                        meta.title.unwrap_or_else(|| fallback_title.to_string()),
-                        meta.artist.unwrap_or_default(),
-                        meta.album.unwrap_or_default(),
-                        meta.duration_secs,
-                        meta.sample_rate,
-                        meta.bitrate,
-                    )
+                    AudioMeta {
+                        title: meta.title.unwrap_or_else(|| fallback_title.to_string()),
+                        artist: meta.artist.unwrap_or_default(),
+                        album: meta.album.unwrap_or_default(),
+                        duration_secs: meta.duration_secs,
+                        sample_rate: meta.sample_rate,
+                        bitrate: meta.bitrate,
+                    }
                 }
                 None => {
                     eprintln!("    ffprobe fallback also failed, using defaults");
-                    (
-                        fallback_title.to_string(),
-                        String::new(),
-                        String::new(),
-                        0,
-                        44100,
-                        0,
-                    )
+                    AudioMeta {
+                        title: fallback_title.to_string(),
+                        artist: String::new(),
+                        album: String::new(),
+                        duration_secs: 0,
+                        sample_rate: 44100,
+                        bitrate: 0,
+                    }
                 }
             }
         }
@@ -871,25 +876,21 @@ fn read_metadata(path: &Path, fallback_title: &str) -> (String, String, String, 
 }
 
 /// Read audio properties from a destination file (for converted tracks).
-fn read_audio_properties(
-    path: &Path,
-    fallback_duration: u16,
-    fallback_sample_rate: u32,
-    fallback_bitrate: u32,
-) -> (u16, u32, u32) {
-    match lofty::read_from_path(path) {
-        Ok(tagged) => {
-            let props = tagged.properties();
-            (
-                props.duration().as_secs() as u16,
-                props.sample_rate().unwrap_or(fallback_sample_rate),
-                props.overall_bitrate().unwrap_or(fallback_bitrate),
-            )
+fn read_audio_properties(path: &Path, fallback_sample_rate: u32, fallback_bitrate: u32) -> AudioMeta {
+    read_metadata(path, &file_stem_string(path))
+        .with_fallback_properties(fallback_sample_rate, fallback_bitrate)
+}
+
+impl AudioMeta {
+    /// Fill in zero properties from fallback values (useful for converted files).
+    fn with_fallback_properties(mut self, sample_rate: u32, bitrate: u32) -> Self {
+        if self.sample_rate == 0 {
+            self.sample_rate = sample_rate;
         }
-        Err(_) => match ffmpeg::probe_metadata(path) {
-            Some(meta) => (meta.duration_secs, meta.sample_rate, meta.bitrate),
-            None => (fallback_duration, fallback_sample_rate, fallback_bitrate),
-        },
+        if self.bitrate == 0 {
+            self.bitrate = bitrate;
+        }
+        self
     }
 }
 

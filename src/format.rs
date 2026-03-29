@@ -57,6 +57,16 @@ impl From<SupportedFormat> for FileType {
     }
 }
 
+impl SupportedFormat {
+    pub const ALL: [SupportedFormat; 5] = [
+        SupportedFormat::Mp3,
+        SupportedFormat::Wav,
+        SupportedFormat::Aiff,
+        SupportedFormat::M4a,
+        SupportedFormat::Flac,
+    ];
+}
+
 impl fmt::Display for SupportedFormat {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str((*self).into())
