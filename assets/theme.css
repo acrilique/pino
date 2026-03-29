@@ -3,58 +3,60 @@
  *
  * All app colors are defined here as CSS custom properties.
  * Change these values to re-theme the entire app.
+ *
+ * Palette: #F6F1E9 · #FFD93D · #FF8400 · #4F200D
  */
 
 :root {
   /* ── Backgrounds ─────────────────────────────────────── */
-  --bg-body:              #0f1116;
-  --bg-surface:           #13151a;  /* panels: log, modal, sync status */
-  --bg-elevated:          #1e2028;  /* interactive: inputs, buttons, badges */
-  --bg-hover:             #282b34;  /* button hover, context item hover */
+  --bg-body:              #f6f1e9;
+  --bg-surface:           #fefcf7;  /* panels: log, modal, sync status */
+  --bg-elevated:          #ece7dd;  /* interactive: inputs, buttons, badges */
+  --bg-hover:             #e2dcd0;  /* button hover, context item hover */
 
   /* ── Borders ─────────────────────────────────────────── */
-  --border-default:       #2a2d34;
-  --border-subtle:        #1e2028;  /* inner dividers, section borders */
-  --border-hover:         #3a3d46;
+  --border-default:       #d9d2c4;
+  --border-subtle:        #e6e0d4;  /* inner dividers, section borders */
+  --border-hover:         #cbc3b3;
 
   /* ── Text ────────────────────────────────────────────── */
-  --text-primary:         #fff;
-  --text-body:            #e0e0e0;
-  --text-secondary:       #c5c5c5;
-  --text-muted:           #b7b7b7;  /* field labels */
-  --text-subtle:          #888;     /* table headers, subtitle, track count */
-  --text-faint:           #666;     /* modal close/refresh default */
-  --text-placeholder:     #555;
+  --text-primary:         #4f200d;
+  --text-body:            #5c2e15;
+  --text-secondary:       #6e3d20;
+  --text-muted:           #7f5030;  /* field labels */
+  --text-subtle:          #9a7050;  /* table headers, subtitle, track count */
+  --text-faint:           #b08a68;  /* modal close/refresh default */
+  --text-placeholder:     #c4a585;
 
-  /* ── Accent (Blue) ──────────────────────────────────── */
-  --accent:               #3b82f6;  /* focus rings, active sort, progress fill */
-  --accent-strong:        #2563eb;  /* primary action buttons */
-  --accent-hover:         #1d4ed8;  /* primary action hover */
-  --accent-light:         #60a5fa;  /* push icon */
-  --accent-bg:            #1e3a5f;  /* push icon bg */
+  /* ── Accent (Orange) ────────────────────────────────── */
+  --accent:               #ff8400;  /* focus rings, active sort, progress fill */
+  --accent-strong:        #e67600;  /* primary action buttons */
+  --accent-hover:         #cc6800;  /* primary action hover */
+  --accent-light:         #ffa040;  /* push icon */
+  --accent-bg:            #fff2e0;  /* push icon bg */
 
   /* ── Semantic: Success ──────────────────────────────── */
-  --success:              #4ade80;
-  --success-bg:           #0a1a10;
-  --success-border:       #16a34a22;
+  --success:              #2e7d32;
+  --success-bg:           #edf7ee;
+  --success-border:       #2e7d3222;
 
   /* ── Semantic: Warning ─────────────────────────────── */
-  --warning:              #fbbf24;
-  --warning-bg:           #2a2008;
-  --warning-border:       #a16207;
-  --warning-border-alpha: #a1620744;
+  --warning:              #d4a017;
+  --warning-bg:           #fffbe6;
+  --warning-border:       #b8860b;
+  --warning-border-alpha: #b8860b44;
 
   /* ── Semantic: Error ───────────────────────────────── */
-  --error:                #f87171;
-  --error-bg:             #1a0a0a;
-  --error-border:         #dc262622;
-  --error-hover-bg:       #2a1515;
+  --error:                #c62828;
+  --error-bg:             #fdeaea;
+  --error-border:         #c6282822;
+  --error-hover-bg:       #f8d4d4;
 
   /* ── Semantic: Info ────────────────────────────────── */
-  --info:                 #94a3b8;  /* also status row text */
-  --info-dim:             #64748b;  /* progress count */
+  --info:                 #6b5a48;  /* also status row text */
+  --info-dim:             #8c7a66;  /* progress count */
 
   /* ── Overlays & Shadows ────────────────────────────── */
-  --overlay-backdrop:     rgba(0, 0, 0, 0.6);
-  --shadow:               rgba(0, 0, 0, 0.5);
+  --overlay-backdrop:     rgba(79, 32, 13, 0.4);
+  --shadow:               rgba(79, 32, 13, 0.15);
 }
