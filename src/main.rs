@@ -193,6 +193,7 @@ fn App() -> Element {
 
     rsx! {
         div { class: "container",
+            oncontextmenu: move |e: MouseEvent| e.prevent_default(),
             h1 { "pino" }
             p { class: "subtitle", "acrilique's USB exporter - powered by rekordcrate" }
 
@@ -356,7 +357,8 @@ fn LibraryTab(
     };
 
     rsx! {
-        DirField {
+        div { class: "tab-content",
+            DirField {
             label: "Folder to import".to_string(),
             value: scan_dir,
             placeholder: "/path/to/music".to_string(),
@@ -488,7 +490,24 @@ fn LibraryTab(
         p { class: "track-count", "{tracks.read().len()} track(s) in library" }
 
         if !tracks.read().is_empty() {
-            div { class: "track-list",
+            div {
+                class: "track-list",
+                id: "track-list",
+                onmounted: |_| {
+                    document::eval(r#"
+                        (function() {
+                            const el = document.getElementById('track-list');
+                            if (!el) return;
+                            function resize() {
+                                const top = el.getBoundingClientRect().top;
+                                el.style.height = (window.innerHeight - top - 34) + 'px';
+                            }
+                            resize();
+                            window.__pino_resize = resize;
+                            window.addEventListener('resize', resize);
+                        })()
+                    "#);
+                },
                 table {
                     thead {
                         tr {
@@ -652,6 +671,7 @@ fn LibraryTab(
                 }
             }
         }
+        } // tab-content
     }
 }
 
@@ -918,23 +938,24 @@ fn SyncTab(
                         }
                     }
                 }
-            }
-        }
-
-        div { class: "field",
-            label { "Parallel jobs" }
-            div { class: "dir-row",
-                input {
-                    r#type: "number",
-                    min: "1",
-                    max: "32",
-                    value: "{jobs}",
-                    class: "jobs-input",
-                    oninput: move |e: FormEvent| {
-                        if let Ok(n) = e.value().parse::<usize>() {
-                            jobs.set(n.clamp(1, 32));
+                if auto_convert() {
+                    div { class: "field",
+                        label { "Parallel jobs" }
+                        div { class: "dir-row",
+                            input {
+                                r#type: "number",
+                                min: "1",
+                                max: "32",
+                                value: "{jobs}",
+                                class: "jobs-input",
+                                oninput: move |e: FormEvent| {
+                                    if let Ok(n) = e.value().parse::<usize>() {
+                                        jobs.set(n.clamp(1, 32));
+                                    }
+                                },
+                            }
                         }
-                    },
+                    }
                 }
             }
         }
