@@ -46,7 +46,7 @@ jobs:
               uses: actions/upload-artifact@v7
               with:
                   name: pino-${{ runner.os }}
-                  path: target/dx/pino/bundle/linux/appimage/Pino_*.AppImage
+                  path: target/dx/pino/bundle/linux/appimage/pino_*.AppImage
 
             - name: Upload artifacts (Windows)
               if: runner.os == 'Windows'
