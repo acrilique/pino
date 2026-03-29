@@ -126,6 +126,53 @@ fn App() -> Element {
     let mut tab = use_signal(|| Tab::Library);
     let mut tracks = use_signal(Vec::<db::TrackWithFiles>::new);
 
+    // Library tab state.
+    let scan_dir = use_signal(String::new);
+    let scanning = use_signal(|| false);
+    let lib_convert_to_idx = use_signal(|| None::<usize>);
+    let converting = use_signal(|| false);
+    let lib_log_entries = use_signal(Vec::<LogEntry>::new);
+    let sort_key = use_signal(|| SortKey::Artist);
+    let sort_order = use_signal(|| SortOrder::Asc);
+
+    // Sync tab state.
+    let dest_dir = use_signal(String::new);
+    let format_enabled = use_signal(|| [true, true, true, true, false]);
+    let sync_convert_to_idx = use_signal(|| None::<usize>);
+    let auto_convert = use_signal(|| true);
+    let syncing = use_signal(|| false);
+    let pulling = use_signal(|| false);
+    let sync_log_entries = use_signal(Vec::<LogEntry>::new);
+    let progress_phase = use_signal(String::new);
+    let progress_current = use_signal(|| 0u32);
+    let progress_total = use_signal(|| 0u32);
+    let jobs = use_signal(|| {
+        std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(4)
+    });
+    let mut remote_only_count = use_signal(|| 0u32);
+
+    // Count tracks on the device that are not in the local library.
+    use_effect(move || {
+        let dir = dest_dir();
+        if dir.is_empty() {
+            remote_only_count.set(0);
+            return;
+        }
+        let db = paths::db_path();
+        let dest = PathBuf::from(dir);
+        spawn(async move {
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            std::thread::spawn(move || {
+                let _ = tx.send(sync::count_remote_only(&db, &dest).unwrap_or(0));
+            });
+            if let Ok(n) = rx.await {
+                remote_only_count.set(n);
+            }
+        });
+    });
+
     // Load tracks from DB on startup.
     let db = paths::db_path();
     use_effect(move || {
@@ -163,8 +210,35 @@ fn App() -> Element {
             }
 
             match tab() {
-                Tab::Library => rsx! { LibraryTab { tracks } },
-                Tab::Sync => rsx! { SyncTab { tracks } },
+                Tab::Library => rsx! {
+                    LibraryTab {
+                        tracks,
+                        scan_dir,
+                        scanning,
+                        convert_to_idx: lib_convert_to_idx,
+                        converting,
+                        log_entries: lib_log_entries,
+                        sort_key,
+                        sort_order,
+                    }
+                },
+                Tab::Sync => rsx! {
+                    SyncTab {
+                        tracks,
+                        dest_dir,
+                        format_enabled,
+                        convert_to_idx: sync_convert_to_idx,
+                        auto_convert,
+                        syncing,
+                        pulling,
+                        log_entries: sync_log_entries,
+                        progress_phase,
+                        progress_current,
+                        progress_total,
+                        jobs,
+                        remote_only_count,
+                    }
+                },
             }
         }
     }
@@ -188,16 +262,16 @@ fn refresh_tracks(tracks: &mut Signal<Vec<db::TrackWithFiles>>) {
 }
 
 #[component]
-fn LibraryTab(mut tracks: Signal<Vec<db::TrackWithFiles>>) -> Element {
-    let scan_dir = use_signal(String::new);
-    let mut scanning = use_signal(|| false);
-    let mut convert_to_idx = use_signal(|| None::<usize>);
-    let mut converting = use_signal(|| false);
-    let mut log_entries = use_signal(Vec::<LogEntry>::new);
-
-    let sort_key = use_signal(|| SortKey::Artist);
-    let sort_order = use_signal(|| SortOrder::Asc);
-
+fn LibraryTab(
+    mut tracks: Signal<Vec<db::TrackWithFiles>>,
+    scan_dir: Signal<String>,
+    mut scanning: Signal<bool>,
+    mut convert_to_idx: Signal<Option<usize>>,
+    mut converting: Signal<bool>,
+    mut log_entries: Signal<Vec<LogEntry>>,
+    sort_key: Signal<SortKey>,
+    sort_order: Signal<SortOrder>,
+) -> Element {
     // Which cell is being edited: (track_id, column).
     let mut editing = use_signal(|| None::<(String, EditColumn)>);
     let edit_value = use_signal(String::new);
@@ -680,44 +754,21 @@ fn format_duration(secs: u16) -> String {
 }
 
 #[component]
-fn SyncTab(mut tracks: Signal<Vec<db::TrackWithFiles>>) -> Element {
-    let dest_dir = use_signal(String::new);
-    let mut format_enabled = use_signal(|| [true, true, true, true, false]);
-    let mut convert_to_idx = use_signal(|| None::<usize>);
-    let mut auto_convert = use_signal(|| true);
-    let mut syncing = use_signal(|| false);
-    let mut pulling = use_signal(|| false);
-    let mut log_entries = use_signal(Vec::<LogEntry>::new);
-    let mut progress_phase = use_signal(String::new);
-    let mut progress_current = use_signal(|| 0u32);
-    let mut progress_total = use_signal(|| 0u32);
-    let mut jobs = use_signal(|| {
-        std::thread::available_parallelism()
-            .map(|n| n.get())
-            .unwrap_or(4)
-    });
-
-    // Count tracks on the device that are not in the local library.
-    let mut remote_only_count = use_signal(|| 0u32);
-    use_effect(move || {
-        let dir = dest_dir();
-        if dir.is_empty() {
-            remote_only_count.set(0);
-            return;
-        }
-        let db = paths::db_path();
-        let dest = PathBuf::from(dir);
-        spawn(async move {
-            let (tx, rx) = tokio::sync::oneshot::channel();
-            std::thread::spawn(move || {
-                let _ = tx.send(sync::count_remote_only(&db, &dest).unwrap_or(0));
-            });
-            if let Ok(n) = rx.await {
-                remote_only_count.set(n);
-            }
-        });
-    });
-
+fn SyncTab(
+    mut tracks: Signal<Vec<db::TrackWithFiles>>,
+    dest_dir: Signal<String>,
+    mut format_enabled: Signal<[bool; 5]>,
+    mut convert_to_idx: Signal<Option<usize>>,
+    mut auto_convert: Signal<bool>,
+    mut syncing: Signal<bool>,
+    mut pulling: Signal<bool>,
+    mut log_entries: Signal<Vec<LogEntry>>,
+    mut progress_phase: Signal<String>,
+    mut progress_current: Signal<u32>,
+    mut progress_total: Signal<u32>,
+    mut jobs: Signal<usize>,
+    mut remote_only_count: Signal<u32>,
+) -> Element {
     // Count tracks that need conversion for the currently selected formats.
     let need_conversion = use_memo(move || {
         let enabled = *format_enabled.read();
