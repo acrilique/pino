@@ -92,6 +92,83 @@ fn format_label(idx: Option<usize>) -> &'static str {
     }
 }
 
+fn sort_prefs_path() -> PathBuf {
+    paths::data_dir().join("sort_prefs.txt")
+}
+
+fn load_sort_prefs() -> (SortKey, SortOrder) {
+    let path = sort_prefs_path();
+    let content = std::fs::read_to_string(path).unwrap_or_default();
+    let mut parts = content.trim().splitn(2, '|');
+    let key = match parts.next().unwrap_or("") {
+        "title" => SortKey::Title,
+        "album" => SortKey::Album,
+        "duration" => SortKey::Duration,
+        _ => SortKey::Artist,
+    };
+    let order = match parts.next().unwrap_or("") {
+        "desc" => SortOrder::Desc,
+        _ => SortOrder::Asc,
+    };
+    (key, order)
+}
+
+fn save_sort_prefs(key: SortKey, order: SortOrder) {
+    let key_str = match key {
+        SortKey::Title => "title",
+        SortKey::Artist => "artist",
+        SortKey::Album => "album",
+        SortKey::Duration => "duration",
+    };
+    let order_str = match order {
+        SortOrder::Asc => "asc",
+        SortOrder::Desc => "desc",
+    };
+    let path = sort_prefs_path();
+    let _ = std::fs::create_dir_all(path.parent().unwrap());
+    match std::fs::write(&path, format!("{key_str}|{order_str}")) {
+        Ok(()) => {}
+        Err(e) => eprintln!("[pino] failed to save sort prefs to {path:?}: {e}"),
+    }
+}
+
+fn col_widths_path() -> PathBuf {
+    paths::data_dir().join("col_widths.txt")
+}
+
+fn load_col_widths() -> Option<Vec<f64>> {
+    let content = std::fs::read_to_string(col_widths_path()).ok()?;
+    let widths: Vec<f64> = content
+        .trim()
+        .split(',')
+        .filter_map(|s| s.parse().ok())
+        .collect();
+    if widths.is_empty() { None } else { Some(widths) }
+}
+
+fn save_col_widths(widths: &str) {
+    let path = col_widths_path();
+    let _ = std::fs::create_dir_all(path.parent().unwrap());
+    let _ = std::fs::write(&path, widths);
+}
+
+fn dest_dir_path() -> PathBuf {
+    paths::data_dir().join("dest_dir.txt")
+}
+
+fn load_dest_dir() -> String {
+    std::fs::read_to_string(dest_dir_path())
+        .unwrap_or_default()
+        .trim()
+        .to_string()
+}
+
+fn save_dest_dir(dir: &str) {
+    let path = dest_dir_path();
+    let _ = std::fs::create_dir_all(path.parent().unwrap());
+    let _ = std::fs::write(&path, dir);
+}
+
 fn main() {
     let custom_head = format!(
         "<style>{}</style><style>{}</style><style>{}</style><style>{}</style>",
@@ -117,17 +194,23 @@ fn main() {
 
 #[component]
 fn App() -> Element {
-    let mut tracks = use_signal(Vec::<db::TrackWithFiles>::new);
+    // Load tracks from DB on startup (synchronous to avoid flicker).
+    let initial_tracks = db::Library::open(&paths::db_path())
+        .and_then(|lib| lib.get_all_tracks_with_files())
+        .unwrap_or_default();
+    let tracks = use_signal(|| initial_tracks);
     let mut sync_open = use_signal(|| false);
 
     // Library state.
     let scanning = use_signal(|| false);
     let lib_log_entries = use_signal(Vec::<LogEntry>::new);
-    let sort_key = use_signal(|| SortKey::Artist);
-    let sort_order = use_signal(|| SortOrder::Asc);
+    let (initial_key, initial_order) = load_sort_prefs();
+    let sort_key = use_signal(|| initial_key);
+    let sort_order = use_signal(|| initial_order);
 
     // Sync state.
-    let dest_dir = use_signal(String::new);
+    let initial_dest = load_dest_dir();
+    let dest_dir = use_signal(|| initial_dest);
     let format_enabled = use_signal(|| [true, true, true, true, false]);
     let sync_convert_to_idx = use_signal(|| None::<usize>);
     let auto_convert = use_signal(|| true);
@@ -144,44 +227,44 @@ fn App() -> Element {
     });
     let mut sync_status = use_signal(|| None::<sync::SyncStatus>);
     let mut checking = use_signal(|| false);
+    let mut dest_error = use_signal(|| None::<String>);
 
     // Check sync status when destination changes.
     use_effect(move || {
         let dir = dest_dir();
         if dir.is_empty() {
             sync_status.set(None);
+            dest_error.set(None);
             return;
         }
+        save_dest_dir(&dir);
+        let dest = PathBuf::from(&dir);
+        if !dest.is_dir() {
+            sync_status.set(None);
+            dest_error.set(Some(format!("Cannot access \"{}\".", dir)));
+            checking.set(false);
+            return;
+        }
+        dest_error.set(None);
         let db = paths::db_path();
-        let dest = PathBuf::from(dir);
         checking.set(true);
         spawn(async move {
             let (tx, rx) = tokio::sync::oneshot::channel();
             std::thread::spawn(move || {
                 let _ = tx.send(sync::check_sync_status(&db, &dest));
             });
-            if let Ok(Ok(status)) = rx.await {
-                sync_status.set(Some(status));
+            match rx.await {
+                Ok(Ok(status)) => sync_status.set(Some(status)),
+                Ok(Err(e)) => {
+                    sync_status.set(None);
+                    dest_error.set(Some(format!("Error checking device: {e}")));
+                }
+                Err(_) => {
+                    sync_status.set(None);
+                    dest_error.set(Some("Check thread panicked.".to_string()));
+                }
             }
             checking.set(false);
-        });
-    });
-
-    // Load tracks from DB on startup.
-    let db = paths::db_path();
-    use_effect(move || {
-        let db = db.clone();
-        spawn(async move {
-            let (tx, rx) = tokio::sync::oneshot::channel();
-            std::thread::spawn(move || {
-                let result = db::Library::open(&db)
-                    .and_then(|lib| lib.get_all_tracks_with_files())
-                    .unwrap_or_default();
-                let _ = tx.send(result);
-            });
-            if let Ok(t) = rx.await {
-                tracks.set(t);
-            }
         });
     });
 
@@ -216,22 +299,37 @@ fn App() -> Element {
                     jobs,
                     sync_status,
                     checking,
+                    dest_error,
                     on_close: move |_| sync_open.set(false),
                     on_refresh: move |_| {
                         let dir = dest_dir();
                         if dir.is_empty() {
                             return;
                         }
+                        let dest = PathBuf::from(&dir);
+                        if !dest.is_dir() {
+                            sync_status.set(None);
+                            dest_error.set(Some(format!("Cannot access \"{}\".", dir)));
+                            return;
+                        }
+                        dest_error.set(None);
                         let db = paths::db_path();
-                        let dest = PathBuf::from(dir);
                         checking.set(true);
                         spawn(async move {
                             let (tx, rx) = tokio::sync::oneshot::channel();
                             std::thread::spawn(move || {
                                 let _ = tx.send(sync::check_sync_status(&db, &dest));
                             });
-                            if let Ok(Ok(status)) = rx.await {
-                                sync_status.set(Some(status));
+                            match rx.await {
+                                Ok(Ok(status)) => sync_status.set(Some(status)),
+                                Ok(Err(e)) => {
+                                    sync_status.set(None);
+                                    dest_error.set(Some(format!("Error checking device: {e}")));
+                                }
+                                Err(_) => {
+                                    sync_status.set(None);
+                                    dest_error.set(Some("Check thread panicked.".to_string()));
+                                }
                             }
                             checking.set(false);
                         });
@@ -274,6 +372,9 @@ fn Library(
 
     // Context menu state: position and target.
     let mut context_menu = use_signal(|| None::<ContextMenu>);
+
+    // Load saved column widths for initial render.
+    let col_widths = load_col_widths().unwrap_or_default();
 
     let sorted_tracks = use_memo(move || {
         let mut list = tracks();
@@ -428,17 +529,89 @@ fn Library(
                             resize();
                             window.__pino_resize = resize;
                             window.addEventListener('resize', resize);
+
+                            var resizing = null;
+                            el.addEventListener('mousedown', function(e) {
+                                if (!e.target.classList.contains('col-resizer')) return;
+                                e.preventDefault();
+                                var th = e.target.closest('th');
+                                if (!th) return;
+                                var nextTh = th.nextElementSibling;
+                                if (!nextTh) return;
+                                var allThs = Array.from(th.parentElement.children);
+                                allThs.forEach(function(c) { c.style.width = c.offsetWidth + 'px'; });
+                                resizing = {
+                                    th: th,
+                                    handle: e.target,
+                                    startX: e.pageX,
+                                    startWidth: th.offsetWidth,
+                                    nextTh: nextTh,
+                                    nextWidth: nextTh ? nextTh.offsetWidth : 0
+                                };
+                                e.target.classList.add('active');
+                                document.body.style.cursor = 'col-resize';
+                                document.body.style.userSelect = 'none';
+                            });
+                            document.addEventListener('mousemove', function(e) {
+                                if (!resizing) return;
+                                e.preventDefault();
+                                var delta = e.pageX - resizing.startX;
+                                var maxGrow = resizing.nextTh ? resizing.nextWidth - 40 : 0;
+                                var maxShrink = resizing.startWidth - 40;
+                                delta = Math.max(-maxShrink, Math.min(delta, maxGrow));
+                                resizing.th.style.width = (resizing.startWidth + delta) + 'px';
+                                if (resizing.nextTh) {
+                                    resizing.nextTh.style.width = (resizing.nextWidth - delta) + 'px';
+                                }
+                            });
+                            document.addEventListener('mouseup', function() {
+                                if (resizing) {
+                                    resizing.handle.classList.remove('active');
+                                    resizing = null;
+                                    document.body.style.cursor = '';
+                                    document.body.style.userSelect = '';
+                                    // Send widths to Rust for persistence.
+                                    var table = el.querySelector('table');
+                                    if (table) {
+                                        var ths = Array.from(table.querySelector('thead tr').children);
+                                        var tableW = table.offsetWidth;
+                                        if (tableW > 0) {
+                                            var pcts = ths.map(function(th) {
+                                                return (th.offsetWidth / tableW * 100).toFixed(2);
+                                            });
+                                            if (window.__pino_save_widths) window.__pino_save_widths(pcts.join(','));
+                                        }
+                                    }
+                                }
+                            });
                         })()
                     "#);
+
+                    // Listen for width updates from JS and save to disk.
+                    let mut col_eval = document::eval(r#"
+                        window.__pino_save_widths = function(csv) { dioxus.send(csv); };
+                    "#);
+                    spawn(async move {
+                        while let Ok(widths) = col_eval.recv::<String>().await {
+                            save_col_widths(&widths);
+                        }
+                    });
                 },
                 table {
                     thead {
                         tr {
-                            SortableHeader { label: "Title", col_key: SortKey::Title, sort_key, sort_order }
-                            SortableHeader { label: "Artist", col_key: SortKey::Artist, sort_key, sort_order }
-                            SortableHeader { label: "Album", col_key: SortKey::Album, sort_key, sort_order }
-                            th { "Formats" }
-                            SortableHeader { label: "Duration", col_key: SortKey::Duration, sort_key, sort_order }
+                            SortableHeader { label: "Title", col_key: SortKey::Title, sort_key, sort_order, resizable: true, initial_width: col_widths.first().map(|w| format!("{w}%")) }
+                            SortableHeader { label: "Artist", col_key: SortKey::Artist, sort_key, sort_order, resizable: true, initial_width: col_widths.get(1).map(|w| format!("{w}%")) }
+                            SortableHeader { label: "Album", col_key: SortKey::Album, sort_key, sort_order, resizable: true, initial_width: col_widths.get(2).map(|w| format!("{w}%")) }
+                            th {
+                                width: col_widths.get(3).map(|w| format!("{w}%")),
+                                "Formats"
+                                div {
+                                    class: "col-resizer",
+                                    onclick: |e: MouseEvent| e.stop_propagation(),
+                                }
+                            }
+                            SortableHeader { label: "Duration", col_key: SortKey::Duration, sort_key, sort_order, resizable: false, initial_width: col_widths.get(4).map(|w| format!("{w}%")) }
                         }
                     }
                     tbody {
@@ -604,11 +777,14 @@ fn SortableHeader(
     col_key: SortKey,
     mut sort_key: Signal<SortKey>,
     mut sort_order: Signal<SortOrder>,
+    resizable: bool,
+    #[props(default)] initial_width: Option<String>,
 ) -> Element {
     let is_active = sort_key() == col_key;
     rsx! {
         th {
             class: if is_active { "sortable active" } else { "sortable" },
+            width: initial_width,
             onclick: move |_| {
                 if sort_key() == col_key {
                     sort_order.set(sort_order().toggle());
@@ -616,10 +792,17 @@ fn SortableHeader(
                     sort_key.set(col_key);
                     sort_order.set(SortOrder::Asc);
                 }
+                save_sort_prefs(sort_key(), sort_order());
             },
             "{label}"
             if is_active {
                 span { class: "sort-indicator", "{sort_order().indicator()}" }
+            }
+            if resizable {
+                div {
+                    class: "col-resizer",
+                    onclick: |e: MouseEvent| e.stop_propagation(),
+                }
             }
         }
     }
@@ -712,6 +895,7 @@ fn SyncModal(
     mut jobs: Signal<usize>,
     mut sync_status: Signal<Option<sync::SyncStatus>>,
     checking: Signal<bool>,
+    dest_error: Signal<Option<String>>,
     on_close: EventHandler,
     on_refresh: EventHandler,
 ) -> Element {
@@ -786,7 +970,12 @@ fn SyncModal(
         }
 
         if has_dest {
-            if checking() {
+            if let Some(err) = dest_error() {
+                div { class: "sync-status error-status",
+                    span { class: "status-icon", "✕" }
+                    p { "{err}" }
+                }
+            } else if checking() {
                 div { class: "sync-status checking",
                     span { class: "status-icon", "⟳" }
                     p { "Checking device..." }
@@ -1113,15 +1302,30 @@ impl LogEntry {
 
 #[component]
 fn DirField(label: String, mut value: Signal<String>, placeholder: String) -> Element {
+    let mut local = use_signal(&*value);
+
+    // Sync local when the parent value changes externally (e.g. Browse button).
+    use_effect(move || {
+        local.set(value());
+    });
+
     rsx! {
         div { class: "field",
             label { "{label}" }
             div { class: "dir-row",
                 Input {
                     r#type: "text",
-                    value: "{value}",
+                    value: "{local}",
                     placeholder: "{placeholder}",
-                    oninput: move |e: FormEvent| value.set(e.value()),
+                    oninput: move |e: FormEvent| local.set(e.value()),
+                    onkeydown: move |e: KeyboardEvent| {
+                        if e.key() == Key::Enter {
+                            value.set(local());
+                        }
+                    },
+                    onblur: move |_| {
+                        value.set(local());
+                    },
                 }
                 button {
                     onclick: move |_| {
