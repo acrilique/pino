@@ -6,7 +6,7 @@
 //
 // SPDX-License-Identifier: MPL-2.0
 
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, Row, params};
 use std::collections::HashMap;
 use std::path::Path;
 
@@ -31,6 +31,31 @@ pub struct TrackFile {
     pub sample_rate: u32,
     pub bitrate: u32,
     pub added_at: String,
+}
+
+fn track_from_row(row: &Row) -> rusqlite::Result<Track> {
+    Ok(Track {
+        id: row.get(0)?,
+        title: row.get(1)?,
+        artist: row.get(2)?,
+        album: row.get(3)?,
+        duration_secs: row.get(4)?,
+        tempo: row.get(5)?,
+        added_at: row.get(6)?,
+    })
+}
+
+fn track_file_from_row(row: &Row) -> rusqlite::Result<TrackFile> {
+    Ok(TrackFile {
+        id: row.get(0)?,
+        track_id: row.get(1)?,
+        format: row.get(2)?,
+        file_path: row.get(3)?,
+        file_size: row.get(4)?,
+        sample_rate: row.get(5)?,
+        bitrate: row.get(6)?,
+        added_at: row.get(7)?,
+    })
 }
 
 /// A track together with all its available files (different formats).
@@ -203,17 +228,7 @@ impl Library {
              FROM tracks ORDER BY artist, album, title",
         )?;
         let tracks: Vec<Track> = track_stmt
-            .query_map([], |row| {
-                Ok(Track {
-                    id: row.get(0)?,
-                    title: row.get(1)?,
-                    artist: row.get(2)?,
-                    album: row.get(3)?,
-                    duration_secs: row.get(4)?,
-                    tempo: row.get(5)?,
-                    added_at: row.get(6)?,
-                })
-            })?
+            .query_map([], track_from_row)?
             .collect::<rusqlite::Result<Vec<_>>>()?;
 
         let mut file_stmt = self.conn.prepare(
@@ -224,18 +239,7 @@ impl Library {
         let mut result = Vec::with_capacity(tracks.len());
         for track in tracks {
             let files: Vec<TrackFile> = file_stmt
-                .query_map(params![track.id], |row| {
-                    Ok(TrackFile {
-                        id: row.get(0)?,
-                        track_id: row.get(1)?,
-                        format: row.get(2)?,
-                        file_path: row.get(3)?,
-                        file_size: row.get(4)?,
-                        sample_rate: row.get(5)?,
-                        bitrate: row.get(6)?,
-                        added_at: row.get(7)?,
-                    })
-                })?
+                .query_map(params![track.id], track_file_from_row)?
                 .collect::<rusqlite::Result<Vec<_>>>()?;
             result.push(TrackWithFiles { track, files });
         }
@@ -256,18 +260,7 @@ impl Library {
              FROM files WHERE track_id = ?1",
         )?;
         let files = stmt
-            .query_map(params![track_id], |row| {
-                Ok(TrackFile {
-                    id: row.get(0)?,
-                    track_id: row.get(1)?,
-                    format: row.get(2)?,
-                    file_path: row.get(3)?,
-                    file_size: row.get(4)?,
-                    sample_rate: row.get(5)?,
-                    bitrate: row.get(6)?,
-                    added_at: row.get(7)?,
-                })
-            })?
+            .query_map(params![track_id], track_file_from_row)?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         Ok(files)
     }

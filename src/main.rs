@@ -10,6 +10,7 @@ mod components;
 mod db;
 mod ffmpeg;
 mod format;
+mod paths;
 mod scan;
 mod sync;
 
@@ -91,13 +92,6 @@ fn format_label(idx: Option<usize>) -> &'static str {
     }
 }
 
-fn db_path() -> PathBuf {
-    dirs::data_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("pino")
-        .join("library.db")
-}
-
 fn main() {
     let custom_head = format!(
         "<style>{}</style><style>{}</style><style>{}</style><style>{}</style>",
@@ -133,7 +127,7 @@ fn App() -> Element {
     let mut tracks = use_signal(Vec::<db::TrackWithFiles>::new);
 
     // Load tracks from DB on startup.
-    let db = db_path();
+    let db = paths::db_path();
     use_effect(move || {
         let db = db.clone();
         spawn(async move {
@@ -178,7 +172,7 @@ fn App() -> Element {
 
 fn refresh_tracks(tracks: &mut Signal<Vec<db::TrackWithFiles>>) {
     let mut tracks = *tracks;
-    let db = db_path();
+    let db = paths::db_path();
     spawn(async move {
         let (tx, rx) = tokio::sync::oneshot::channel();
         std::thread::spawn(move || {
@@ -265,7 +259,7 @@ fn LibraryTab(mut tracks: Signal<Vec<db::TrackWithFiles>>) -> Element {
             drop(w);
 
             // Persist to DB in background.
-            let db = db_path();
+            let db = paths::db_path();
             let scroll_id = track_id.clone();
             spawn(async move {
                 let (tx, rx) = tokio::sync::oneshot::channel();
@@ -299,7 +293,7 @@ fn LibraryTab(mut tracks: Signal<Vec<db::TrackWithFiles>>) -> Element {
             disabled: scanning() || scan_dir().is_empty(),
             onclick: move |_| {
                 let input = PathBuf::from(scan_dir());
-                let db = db_path();
+                let db = paths::db_path();
                 scanning.set(true);
                 log_entries.write().clear();
                 log_entries.write().push(LogEntry::info("Scanning..."));
@@ -358,7 +352,7 @@ fn LibraryTab(mut tracks: Signal<Vec<db::TrackWithFiles>>) -> Element {
                     onclick: move |_| {
                         let Some(idx) = convert_to_idx() else { return };
                         let target = FORMATS[idx].0;
-                        let db = db_path();
+                        let db = paths::db_path();
                         let track_ids: Vec<String> = tracks
                             .read()
                             .iter()
@@ -541,7 +535,7 @@ fn LibraryTab(mut tracks: Signal<Vec<db::TrackWithFiles>>) -> Element {
                                     drop(w);
 
                                     // Persist.
-                                    let db = db_path();
+                                    let db = paths::db_path();
                                     spawn(async move {
                                         let (tx, rx) = tokio::sync::oneshot::channel();
                                         std::thread::spawn(move || {
@@ -565,7 +559,7 @@ fn LibraryTab(mut tracks: Signal<Vec<db::TrackWithFiles>>) -> Element {
 
                                     tracks.write().retain(|t| t.track.id != track_id);
 
-                                    let db = db_path();
+                                    let db = paths::db_path();
                                     spawn(async move {
                                         let (tx, rx) = tokio::sync::oneshot::channel();
                                         std::thread::spawn(move || {
@@ -711,7 +705,7 @@ fn SyncTab(mut tracks: Signal<Vec<db::TrackWithFiles>>) -> Element {
             remote_only_count.set(0);
             return;
         }
-        let db = db_path();
+        let db = paths::db_path();
         let dest = PathBuf::from(dir);
         spawn(async move {
             let (tx, rx) = tokio::sync::oneshot::channel();
@@ -765,7 +759,7 @@ fn SyncTab(mut tracks: Signal<Vec<db::TrackWithFiles>>) -> Element {
                 button {
                     disabled: pulling() || syncing(),
                     onclick: move |_| {
-                        let db = db_path();
+                        let db = paths::db_path();
                         let dest = PathBuf::from(dest_dir());
                         pulling.set(true);
                         log_entries.write().clear();
@@ -939,7 +933,7 @@ fn SyncTab(mut tracks: Signal<Vec<db::TrackWithFiles>>) -> Element {
                     jobs: jobs(),
                 };
 
-                let db = db_path();
+                let db = paths::db_path();
                 log_entries.write().clear();
                 progress_phase.set(String::new());
                 progress_current.set(0);

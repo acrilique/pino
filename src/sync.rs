@@ -9,15 +9,67 @@
 use crate::db::{Library, Track, TrackFile, TrackWithFiles};
 use crate::ffmpeg;
 use crate::format::SupportedFormat;
+use crate::paths;
 use crate::scan;
 use lofty::prelude::*;
 use rekordcrate::pdb::io::Database;
 use rekordcrate::pdb::string::DeviceSQLString;
 use rekordcrate::pdb::*;
 use std::collections::{HashMap, HashSet};
+use std::fmt;
 use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
+
+#[derive(Debug)]
+pub enum SyncError {
+    Db(rusqlite::Error),
+    Io(std::io::Error),
+    Pdb(rekordcrate::Error),
+    FfmpegNotFound,
+    NoRemoteDb,
+}
+
+impl fmt::Display for SyncError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Db(e) => write!(f, "Database error: {e}"),
+            Self::Io(e) => write!(f, "I/O error: {e}"),
+            Self::Pdb(e) => write!(f, "PDB generation failed: {e}"),
+            Self::FfmpegNotFound => {
+                write!(
+                    f,
+                    "ffmpeg is required for audio conversion but was not found in PATH"
+                )
+            }
+            Self::NoRemoteDb => write!(f, "No pino database found on this device"),
+        }
+    }
+}
+
+impl From<rusqlite::Error> for SyncError {
+    fn from(e: rusqlite::Error) -> Self {
+        Self::Db(e)
+    }
+}
+
+impl From<std::io::Error> for SyncError {
+    fn from(e: std::io::Error) -> Self {
+        Self::Io(e)
+    }
+}
+
+impl From<rekordcrate::Error> for SyncError {
+    fn from(e: rekordcrate::Error) -> Self {
+        Self::Pdb(e)
+    }
+}
+
+impl From<rekordcrate::pdb::string::StringError> for SyncError {
+    fn from(e: rekordcrate::pdb::string::StringError) -> Self {
+        Self::Pdb(e.into())
+    }
+}
 
 pub struct SyncConfig {
     pub supported_formats: Vec<SupportedFormat>,
@@ -61,17 +113,111 @@ impl std::fmt::Display for SyncResult {
 
 /// Directory where pino stores locally converted files.
 fn converted_dir() -> PathBuf {
-    dirs::data_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("pino")
-        .join("converted")
+    paths::data_dir().join("converted")
+}
+
+fn new_id() -> String {
+    uuid::Uuid::new_v4().to_string()
+}
+
+fn file_stem_string(path: &Path) -> String {
+    path.file_stem()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .into_owned()
+}
+
+fn find_file_in_formats<'a>(
+    files: &'a [TrackFile],
+    formats: &[SupportedFormat],
+) -> Option<&'a TrackFile> {
+    files.iter().find(|f| {
+        SupportedFormat::try_from(f.format.as_str()).is_ok_and(|fmt| formats.contains(&fmt))
+    })
+}
+
+fn today() -> String {
+    chrono::Local::now().format("%Y-%m-%d").to_string()
+}
+
+fn remote_db_path(dest_dir: &Path) -> PathBuf {
+    dest_dir.join("PIONEER").join("pino").join("library.db")
+}
+
+fn open_remote_db(dest_dir: &Path) -> Result<Option<Library>, SyncError> {
+    let path = remote_db_path(dest_dir);
+    if !path.exists() {
+        return Ok(None);
+    }
+    Ok(Some(Library::open(&path)?))
+}
+
+fn file_size_on_disk(path: &Path) -> u32 {
+    std::fs::metadata(path).map(|m| m.len() as u32).unwrap_or(0)
+}
+
+struct ConvertJob<'a> {
+    src: &'a Path,
+    dest: &'a Path,
+    format: SupportedFormat,
+}
+
+/// Run ffmpeg conversions in parallel, returning which jobs succeeded.
+fn run_conversions(
+    jobs: &[ConvertJob],
+    num_workers: usize,
+    on_progress: &(dyn Fn(SyncProgress) + Sync),
+) -> Vec<bool> {
+    let total = jobs.len();
+    if total == 0 {
+        return vec![];
+    }
+    let results: Vec<std::sync::Mutex<bool>> =
+        (0..total).map(|_| std::sync::Mutex::new(false)).collect();
+    let next_idx = AtomicUsize::new(0);
+    let done_count = AtomicU32::new(0);
+
+    std::thread::scope(|s| {
+        let workers = num_workers.min(total).max(1);
+        for _ in 0..workers {
+            s.spawn(|| {
+                loop {
+                    let idx = next_idx.fetch_add(1, Ordering::Relaxed);
+                    if idx >= total {
+                        break;
+                    }
+                    let job = &jobs[idx];
+                    match ffmpeg::convert(job.src, job.dest, job.format) {
+                        Ok(()) => *results[idx].lock().unwrap() = true,
+                        Err(e) => {
+                            eprintln!(
+                                "  Warning: conversion failed for {}: {e}",
+                                job.src.display()
+                            );
+                        }
+                    }
+                    let done = done_count.fetch_add(1, Ordering::Relaxed) + 1;
+                    on_progress(SyncProgress {
+                        phase: "Converting files",
+                        current: done,
+                        total: total as u32,
+                    });
+                }
+            });
+        }
+    });
+
+    results
+        .into_iter()
+        .map(|m| m.into_inner().unwrap())
+        .collect()
 }
 
 /// Scan a folder and import all audio files into the local database.
 ///
 /// Returns the number of newly imported tracks.
-pub fn import_folder(db_path: &Path, input_dir: &Path) -> Result<u32, String> {
-    let db = Library::open(db_path).map_err(|e| format!("Failed to open database: {e}"))?;
+pub fn import_folder(db_path: &Path, input_dir: &Path) -> Result<u32, SyncError> {
+    let db = Library::open(db_path)?;
 
     let all_formats = vec![
         SupportedFormat::Mp3,
@@ -81,12 +227,11 @@ pub fn import_folder(db_path: &Path, input_dir: &Path) -> Result<u32, String> {
         SupportedFormat::Flac,
     ];
     let mut audio_files = Vec::new();
-    scan::find_audio_files(input_dir, &all_formats, true, &mut audio_files)
-        .map_err(|e| format!("Scan failed: {e}"))?;
+    scan::find_audio_files(input_dir, &all_formats, true, &mut audio_files)?;
     audio_files.sort_by(|(a, _), (b, _)| a.cmp(b));
 
     let mut imported = 0u32;
-    let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+    let today = today();
 
     for (src_path, src_format) in &audio_files {
         let path_str = src_path.to_string_lossy().to_string();
@@ -94,11 +239,7 @@ pub fn import_folder(db_path: &Path, input_dir: &Path) -> Result<u32, String> {
             continue;
         }
 
-        let original_stem = src_path
-            .file_stem()
-            .unwrap_or_default()
-            .to_string_lossy()
-            .into_owned();
+        let original_stem = file_stem_string(src_path);
 
         let format_str: String = match src_format {
             Some(fmt) => <SupportedFormat as Into<&str>>::into(*fmt).to_string(),
@@ -113,11 +254,9 @@ pub fn import_folder(db_path: &Path, input_dir: &Path) -> Result<u32, String> {
         let (title, artist, album, duration_secs, sample_rate, bitrate) =
             read_metadata(src_path, &original_stem);
 
-        let file_size = std::fs::metadata(src_path)
-            .map(|m| m.len() as u32)
-            .unwrap_or(0);
+        let file_size = file_size_on_disk(src_path);
 
-        let track_id = uuid::Uuid::new_v4().to_string();
+        let track_id = new_id();
         let track = Track {
             id: track_id.clone(),
             title,
@@ -129,7 +268,7 @@ pub fn import_folder(db_path: &Path, input_dir: &Path) -> Result<u32, String> {
         };
 
         let file = TrackFile {
-            id: uuid::Uuid::new_v4().to_string(),
+            id: new_id(),
             track_id,
             format: format_str,
             file_path: path_str,
@@ -166,14 +305,14 @@ pub fn convert_tracks(
     target: SupportedFormat,
     jobs: usize,
     on_progress: &(dyn Fn(SyncProgress) + Sync),
-) -> Result<u32, String> {
+) -> Result<u32, SyncError> {
     if !ffmpeg::check_available() {
-        return Err("ffmpeg is required for audio conversion but was not found in PATH".into());
+        return Err(SyncError::FfmpegNotFound);
     }
 
-    let db = Library::open(db_path).map_err(|e| format!("Failed to open database: {e}"))?;
+    let db = Library::open(db_path)?;
     let conv_dir = converted_dir();
-    std::fs::create_dir_all(&conv_dir).map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(&conv_dir)?;
 
     let target_ext: &str = target.into();
 
@@ -190,9 +329,7 @@ pub fn convert_tracks(
     let mut claimed_paths: HashSet<PathBuf> = HashSet::new();
 
     for track_id in track_ids {
-        let files = db
-            .get_files_for_track(track_id)
-            .map_err(|e| e.to_string())?;
+        let files = db.get_files_for_track(track_id)?;
 
         if files.iter().any(|f| f.format == target_ext) {
             continue;
@@ -207,11 +344,7 @@ pub fn convert_tracks(
             continue;
         }
 
-        let stem = src_path
-            .file_stem()
-            .unwrap_or_default()
-            .to_string_lossy()
-            .into_owned();
+        let stem = file_stem_string(&src_path);
         let base = conv_dir.join(format!("{stem}.{target_ext}"));
         let dest_path = unique_path_batch(&base, &mut claimed_paths);
 
@@ -229,62 +362,31 @@ pub fn convert_tracks(
     }
 
     // === Conversion: parallel ffmpeg ===
-    let convert_total = items.len();
-    let convert_ok: Vec<std::sync::Mutex<bool>> = (0..convert_total)
-        .map(|_| std::sync::Mutex::new(false))
+    let conv_jobs: Vec<ConvertJob> = items
+        .iter()
+        .map(|item| ConvertJob {
+            src: &item.src_path,
+            dest: &item.dest_path,
+            format: target,
+        })
         .collect();
-    let next_idx = AtomicUsize::new(0);
-    let done_count = AtomicU32::new(0);
-
-    std::thread::scope(|s| {
-        let num_workers = jobs.min(convert_total).max(1);
-        for _ in 0..num_workers {
-            s.spawn(|| {
-                loop {
-                    let idx = next_idx.fetch_add(1, Ordering::Relaxed);
-                    if idx >= convert_total {
-                        break;
-                    }
-                    let item = &items[idx];
-                    match ffmpeg::convert(&item.src_path, &item.dest_path, target) {
-                        Ok(()) => {
-                            *convert_ok[idx].lock().unwrap() = true;
-                        }
-                        Err(e) => {
-                            eprintln!(
-                                "  Warning: conversion failed for {}: {e}",
-                                item.src_path.display()
-                            );
-                        }
-                    }
-                    let done = done_count.fetch_add(1, Ordering::Relaxed) + 1;
-                    on_progress(SyncProgress {
-                        phase: "Converting files",
-                        current: done,
-                        total: convert_total as u32,
-                    });
-                }
-            });
-        }
-    });
+    let convert_ok = run_conversions(&conv_jobs, jobs, on_progress);
 
     // === Register results (sequential DB writes) ===
-    let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+    let today = today();
     let mut converted = 0u32;
 
     for (i, item) in items.iter().enumerate() {
-        if !*convert_ok[i].lock().unwrap() {
+        if !convert_ok[i] {
             continue;
         }
 
         let (_, sample_rate, bitrate) =
             read_audio_properties(&item.dest_path, 0, item.src_sample_rate, item.src_bitrate);
-        let file_size = std::fs::metadata(&item.dest_path)
-            .map(|m| m.len() as u32)
-            .unwrap_or(0);
+        let file_size = file_size_on_disk(&item.dest_path);
 
         let file = TrackFile {
-            id: uuid::Uuid::new_v4().to_string(),
+            id: new_id(),
             track_id: item.track_id.clone(),
             format: target_ext.to_string(),
             file_path: item.dest_path.to_string_lossy().to_string(),
@@ -315,30 +417,25 @@ pub fn sync(
     dest_dir: &Path,
     config: &SyncConfig,
     on_progress: &(dyn Fn(SyncProgress) + Sync),
-) -> Result<SyncResult, String> {
+) -> Result<SyncResult, SyncError> {
     if config.convert_to.is_some() && !ffmpeg::check_available() {
-        return Err("ffmpeg is required for audio conversion but was not found in PATH".into());
+        return Err(SyncError::FfmpegNotFound);
     }
 
-    let local_db = Library::open(db_path).map_err(|e| format!("Failed to open local DB: {e}"))?;
+    let local_db = Library::open(db_path)?;
 
-    let pino_dir = dest_dir.join("PIONEER").join("pino");
-    std::fs::create_dir_all(&pino_dir).map_err(|e| e.to_string())?;
-    let remote_db_path = pino_dir.join("library.db");
-    let remote_db =
-        Library::open(&remote_db_path).map_err(|e| format!("Failed to open remote DB: {e}"))?;
+    let rdb_path = remote_db_path(dest_dir);
+    if let Some(parent) = rdb_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let remote_db = Library::open(&rdb_path)?;
 
     let contents_dir = dest_dir.join("Contents");
-    std::fs::create_dir_all(&contents_dir).map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(&contents_dir)?;
 
-    let local_tracks = local_db
-        .get_all_tracks_with_files()
-        .map_err(|e| e.to_string())?;
-    let remote_ids: std::collections::HashSet<String> = remote_db
-        .get_track_ids()
-        .map_err(|e| e.to_string())?
-        .into_iter()
-        .collect();
+    let local_tracks = local_db.get_all_tracks_with_files()?;
+    let remote_ids: std::collections::HashSet<String> =
+        remote_db.get_track_ids()?.into_iter().collect();
 
     let to_sync: Vec<&TrackWithFiles> = local_tracks
         .iter()
@@ -347,9 +444,7 @@ pub fn sync(
 
     // === Metadata Update Phase ===
     // For tracks already on the remote, push any local metadata changes.
-    let remote_tracks = remote_db
-        .get_all_tracks_with_files()
-        .map_err(|e| e.to_string())?;
+    let remote_tracks = remote_db.get_all_tracks_with_files()?;
     let remote_by_id: HashMap<&str, &Track> = remote_tracks
         .iter()
         .map(|twf| (twf.track.id.as_str(), &twf.track))
@@ -387,9 +482,9 @@ pub fn sync(
         });
     }
 
-    let mut used_filenames = remote_db.used_filenames().map_err(|e| e.to_string())?;
+    let mut used_filenames = remote_db.used_filenames()?;
     let conv_dir = converted_dir();
-    std::fs::create_dir_all(&conv_dir).map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(&conv_dir)?;
 
     // === Preparation Phase ===
     struct PreparedItem<'a> {
@@ -409,10 +504,7 @@ pub fn sync(
     for twf in &to_sync {
         let track = &twf.track;
 
-        let matching_file = twf.files.iter().find(|f| {
-            SupportedFormat::try_from(f.format.as_str())
-                .is_ok_and(|fmt| config.supported_formats.contains(&fmt))
-        });
+        let matching_file = find_file_in_formats(&twf.files, &config.supported_formats);
 
         let (src_file, dest_format, needs_conversion) = if let Some(f) = matching_file {
             let fmt = SupportedFormat::try_from(f.format.as_str()).unwrap();
@@ -436,11 +528,7 @@ pub fn sync(
         }
 
         let dest_ext: &str = dest_format.into();
-        let original_stem = src_path
-            .file_stem()
-            .unwrap_or_default()
-            .to_string_lossy()
-            .into_owned();
+        let original_stem = file_stem_string(&src_path);
 
         let dest_filename = {
             let base = format!("{original_stem}.{dest_ext}");
@@ -478,58 +566,22 @@ pub fn sync(
         .filter(|(_, p)| p.needs_conversion)
         .map(|(i, _)| i)
         .collect();
-    let convert_total = items_to_convert.len();
-
-    let convert_ok: Vec<std::sync::Mutex<bool>> = (0..prepared.len())
-        .map(|_| std::sync::Mutex::new(false))
+    let conv_jobs: Vec<ConvertJob> = items_to_convert
+        .iter()
+        .map(|&i| ConvertJob {
+            src: &prepared[i].src_path,
+            dest: &prepared[i].local_conv_path,
+            format: prepared[i].dest_format,
+        })
         .collect();
-
-    if convert_total > 0 {
-        let next_idx = AtomicUsize::new(0);
-        let done_count = AtomicU32::new(0);
-
-        std::thread::scope(|s| {
-            let num_workers = config.jobs.min(convert_total).max(1);
-            for _ in 0..num_workers {
-                s.spawn(|| {
-                    loop {
-                        let work_idx = next_idx.fetch_add(1, Ordering::Relaxed);
-                        if work_idx >= convert_total {
-                            break;
-                        }
-                        let idx = items_to_convert[work_idx];
-                        let item = &prepared[idx];
-
-                        match ffmpeg::convert(
-                            &item.src_path,
-                            &item.local_conv_path,
-                            item.dest_format,
-                        ) {
-                            Ok(()) => {
-                                *convert_ok[idx].lock().unwrap() = true;
-                            }
-                            Err(e) => {
-                                eprintln!(
-                                    "  Warning: conversion failed for {}: {e}",
-                                    item.src_file.file_path
-                                );
-                            }
-                        }
-
-                        let done = done_count.fetch_add(1, Ordering::Relaxed) + 1;
-                        on_progress(SyncProgress {
-                            phase: "Converting files",
-                            current: done,
-                            total: convert_total as u32,
-                        });
-                    }
-                });
-            }
-        });
+    let conv_results = run_conversions(&conv_jobs, config.jobs, on_progress);
+    let mut convert_ok = vec![false; prepared.len()];
+    for (job_idx, &prep_idx) in items_to_convert.iter().enumerate() {
+        convert_ok[prep_idx] = conv_results[job_idx];
     }
 
     // === Copy Phase (sequential) ===
-    let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+    let today = today();
     let copy_total = prepared.len() as u32;
     let mut synced = 0u32;
     let mut converted = 0u32;
@@ -542,31 +594,31 @@ pub fn sync(
         });
 
         let dest_path = contents_dir.join(&item.dest_filename);
+        let dest_ext: &str = item.dest_format.into();
 
+        let (sample_rate, bitrate);
         if item.needs_conversion {
-            if !*convert_ok[i].lock().unwrap() {
+            if !convert_ok[i] {
                 skipped += 1;
                 continue;
             }
 
-            // Register converted file in local DB.
-            let dest_ext: &str = item.dest_format.into();
-            let (_, sample_rate, bitrate) = read_audio_properties(
+            let (_, sr, br) = read_audio_properties(
                 &item.local_conv_path,
                 0,
                 item.src_file.sample_rate,
                 item.src_file.bitrate,
             );
-            let local_file_size = std::fs::metadata(&item.local_conv_path)
-                .map(|m| m.len() as u32)
-                .unwrap_or(0);
+            sample_rate = sr;
+            bitrate = br;
 
+            // Register converted file in local DB.
             let local_file = TrackFile {
-                id: uuid::Uuid::new_v4().to_string(),
+                id: new_id(),
                 track_id: item.track.id.clone(),
                 format: dest_ext.to_string(),
                 file_path: item.local_conv_path.to_string_lossy().to_string(),
-                file_size: local_file_size,
+                file_size: file_size_on_disk(&item.local_conv_path),
                 sample_rate,
                 bitrate,
                 added_at: today.clone(),
@@ -580,31 +632,21 @@ pub fn sync(
                 continue;
             }
             converted += 1;
-        } else if let Err(e) = std::fs::copy(&item.src_path, &dest_path) {
-            eprintln!(
-                "  Warning: copy failed for {}: {e}",
-                item.src_file.file_path
-            );
-            skipped += 1;
-            continue;
+        } else {
+            sample_rate = item.src_file.sample_rate;
+            bitrate = item.src_file.bitrate;
+
+            if let Err(e) = std::fs::copy(&item.src_path, &dest_path) {
+                eprintln!(
+                    "  Warning: copy failed for {}: {e}",
+                    item.src_file.file_path
+                );
+                skipped += 1;
+                continue;
+            }
         }
 
-        let file_size = std::fs::metadata(&dest_path)
-            .map(|m| m.len() as u32)
-            .unwrap_or(0);
-
-        let dest_ext: &str = item.dest_format.into();
-        let (sample_rate, bitrate) = if item.needs_conversion {
-            let (_, sr, br) = read_audio_properties(
-                &dest_path,
-                0,
-                item.src_file.sample_rate,
-                item.src_file.bitrate,
-            );
-            (sr, br)
-        } else {
-            (item.src_file.sample_rate, item.src_file.bitrate)
-        };
+        let file_size = file_size_on_disk(&dest_path);
 
         // Write track + file to remote DB.
         let remote_track = Track {
@@ -618,7 +660,7 @@ pub fn sync(
         };
 
         let remote_file = TrackFile {
-            id: uuid::Uuid::new_v4().to_string(),
+            id: new_id(),
             track_id: item.track.id.clone(),
             format: dest_ext.to_string(),
             file_path: item.dest_filename.clone(),
@@ -658,40 +700,27 @@ pub fn sync(
 pub fn count_needing_conversion(
     db_path: &Path,
     formats: &[SupportedFormat],
-) -> Result<u32, String> {
-    let db = Library::open(db_path).map_err(|e| format!("Failed to open database: {e}"))?;
-    let tracks = db.get_all_tracks_with_files().map_err(|e| e.to_string())?;
+) -> Result<u32, SyncError> {
+    let db = Library::open(db_path)?;
+    let tracks = db.get_all_tracks_with_files()?;
 
     let count = tracks
         .iter()
-        .filter(|twf| {
-            !twf.files.iter().any(|f| {
-                SupportedFormat::try_from(f.format.as_str()).is_ok_and(|fmt| formats.contains(&fmt))
-            })
-        })
+        .filter(|twf| find_file_in_formats(&twf.files, formats).is_none())
         .count() as u32;
 
     Ok(count)
 }
 
 /// Count tracks that exist on the remote (USB) but not in the local library.
-pub fn count_remote_only(db_path: &Path, dest_dir: &Path) -> Result<u32, String> {
-    let local_db = Library::open(db_path).map_err(|e| format!("Failed to open local DB: {e}"))?;
-    let remote_db_path = dest_dir.join("PIONEER").join("pino").join("library.db");
-    if !remote_db_path.exists() {
+pub fn count_remote_only(db_path: &Path, dest_dir: &Path) -> Result<u32, SyncError> {
+    let local_db = Library::open(db_path)?;
+    let Some(remote_db) = open_remote_db(dest_dir)? else {
         return Ok(0);
-    }
-    let remote_db =
-        Library::open(&remote_db_path).map_err(|e| format!("Failed to open remote DB: {e}"))?;
+    };
 
-    let local_ids: HashSet<String> = local_db
-        .get_track_ids()
-        .map_err(|e| e.to_string())?
-        .into_iter()
-        .collect();
-    let remote_tracks = remote_db
-        .get_all_tracks_with_files()
-        .map_err(|e| e.to_string())?;
+    let local_ids: HashSet<String> = local_db.get_track_ids()?.into_iter().collect();
+    let remote_tracks = remote_db.get_all_tracks_with_files()?;
 
     let count = remote_tracks
         .iter()
@@ -708,23 +737,12 @@ pub fn pull_from_remote(
     db_path: &Path,
     dest_dir: &Path,
     on_progress: &(dyn Fn(SyncProgress) + Sync),
-) -> Result<u32, String> {
-    let local_db = Library::open(db_path).map_err(|e| format!("Failed to open local DB: {e}"))?;
-    let remote_db_path = dest_dir.join("PIONEER").join("pino").join("library.db");
-    if !remote_db_path.exists() {
-        return Err("No pino database found on this device.".into());
-    }
-    let remote_db =
-        Library::open(&remote_db_path).map_err(|e| format!("Failed to open remote DB: {e}"))?;
+) -> Result<u32, SyncError> {
+    let local_db = Library::open(db_path)?;
+    let remote_db = open_remote_db(dest_dir)?.ok_or(SyncError::NoRemoteDb)?;
 
-    let local_ids: HashSet<String> = local_db
-        .get_track_ids()
-        .map_err(|e| e.to_string())?
-        .into_iter()
-        .collect();
-    let remote_tracks = remote_db
-        .get_all_tracks_with_files()
-        .map_err(|e| e.to_string())?;
+    let local_ids: HashSet<String> = local_db.get_track_ids()?.into_iter().collect();
+    let remote_tracks = remote_db.get_all_tracks_with_files()?;
 
     let to_pull: Vec<&TrackWithFiles> = remote_tracks
         .iter()
@@ -735,14 +753,11 @@ pub fn pull_from_remote(
         return Ok(0);
     }
 
-    let import_dir = dirs::data_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("pino")
-        .join("imported");
-    std::fs::create_dir_all(&import_dir).map_err(|e| e.to_string())?;
+    let import_dir = paths::data_dir().join("imported");
+    std::fs::create_dir_all(&import_dir)?;
 
     let contents_dir = dest_dir.join("Contents");
-    let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+    let today = today();
     let total = to_pull.len() as u32;
     let mut pulled = 0u32;
 
@@ -785,7 +800,7 @@ pub fn pull_from_remote(
             }
 
             let local_file = TrackFile {
-                id: uuid::Uuid::new_v4().to_string(),
+                id: new_id(),
                 track_id: twf.track.id.clone(),
                 format: remote_file.format.clone(),
                 file_path: dest.to_string_lossy().to_string(),
@@ -813,28 +828,7 @@ pub fn pull_from_remote(
 /// Generate a unique file path by appending `_2`, `_3`, etc. if the path already exists.
 #[allow(dead_code)]
 fn unique_path(path: &Path) -> PathBuf {
-    if !path.exists() {
-        return path.to_path_buf();
-    }
-    let stem = path
-        .file_stem()
-        .unwrap_or_default()
-        .to_string_lossy()
-        .into_owned();
-    let ext = path
-        .extension()
-        .unwrap_or_default()
-        .to_string_lossy()
-        .into_owned();
-    let parent = path.parent().unwrap_or(Path::new("."));
-    let mut n = 2u32;
-    loop {
-        let candidate = parent.join(format!("{stem}_{n}.{ext}"));
-        if !candidate.exists() {
-            return candidate;
-        }
-        n += 1;
-    }
+    unique_path_batch(path, &mut HashSet::new())
 }
 
 /// Like `unique_path`, but also avoids collisions with paths already claimed in the current batch.
@@ -945,14 +939,8 @@ fn read_audio_properties(
 }
 
 /// Generate a Pioneer PDB database from all tracks in the given library.
-fn generate_pdb(db: &Library, dest_dir: &Path) -> Result<(), String> {
-    generate_pdb_inner(db, dest_dir).map_err(|e| e.to_string())
-}
-
-fn generate_pdb_inner(db: &Library, dest_dir: &Path) -> rekordcrate::Result<()> {
-    let all = db
-        .get_all_tracks_with_files()
-        .map_err(|e| std::io::Error::other(e.to_string()))?;
+fn generate_pdb(db: &Library, dest_dir: &Path) -> Result<(), SyncError> {
+    let all = db.get_all_tracks_with_files()?;
 
     if all.is_empty() {
         return Ok(());
@@ -1016,6 +1004,7 @@ fn generate_pdb_inner(db: &Library, dest_dir: &Path) -> rekordcrate::Result<()> 
     let mut pdb = Database::create(pdb_file, DatabaseType::Plain, &table_page_types)?;
 
     let mut exported_count: u32 = 0;
+    let today = today();
     for twf in &all {
         let track = &twf.track;
         // Use the first file entry (remote DB has exactly one per track).
@@ -1036,7 +1025,6 @@ fn generate_pdb_inner(db: &Library, dest_dir: &Path) -> rekordcrate::Result<()> 
         };
 
         let pioneer_path = format!("/Contents/{}", file.file_path);
-        let today = chrono::Local::now().format("%Y-%m-%d").to_string();
 
         let Ok(file_type) = SupportedFormat::try_from(file.format.as_str()) else {
             eprintln!(
@@ -1073,7 +1061,7 @@ fn generate_pdb_inner(db: &Library, dest_dir: &Path) -> rekordcrate::Result<()> 
                 );
                 continue;
             }
-            Err(err) => return Err(err),
+            Err(err) => return Err(err.into()),
         }
     }
 
@@ -1101,7 +1089,6 @@ fn generate_pdb_inner(db: &Library, dest_dir: &Path) -> rekordcrate::Result<()> 
     rekordcrate::pdb::defaults::insert_default_columns(&mut pdb)?;
     rekordcrate::pdb::defaults::insert_default_menus(&mut pdb)?;
 
-    let today = chrono::Local::now().format("%Y-%m-%d").to_string();
     pdb.add_row(Row::Plain(PlainRow::History(History {
         subtype: Subtype(640),
         index_shift: 0,
