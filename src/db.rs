@@ -7,7 +7,7 @@
 // SPDX-License-Identifier: MPL-2.0
 
 use rusqlite::{Connection, Row, params};
-use std::collections::HashMap;
+use std::collections::HashSet;
 use std::path::Path;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -296,13 +296,13 @@ impl Library {
     }
 
     /// Get all file_path values in the DB (for deduplication on the remote side).
-    pub fn used_filenames(&self) -> rusqlite::Result<HashMap<String, u32>> {
+    pub fn used_filenames(&self) -> rusqlite::Result<HashSet<String>> {
         let mut stmt = self.conn.prepare("SELECT file_path FROM files")?;
-        let mut map = HashMap::new();
+        let mut set = HashSet::new();
         let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
         for row in rows {
-            map.insert(row?, 1);
+            set.insert(row?);
         }
-        Ok(map)
+        Ok(set)
     }
 }

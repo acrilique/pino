@@ -12,16 +12,14 @@ mod ffmpeg;
 mod format;
 mod paths;
 mod prefs;
-mod scan;
 mod sync;
 mod task;
 
 use components::library::Library;
 use components::log::LogEntry;
-use components::sync_modal::SyncModal;
+use components::sync_modal::{SyncModal, SyncState, check_device};
 use dioxus::prelude::*;
 use std::path::PathBuf;
-use task::spawn_blocking;
 
 fn main() {
     let custom_head = format!(
@@ -63,60 +61,17 @@ fn App() -> Element {
     let sort_key = use_signal(|| initial_key);
     let sort_order = use_signal(|| initial_order);
 
-    // Sync state.
-    let initial_dest = prefs::load_dest_dir();
-    let dest_dir = use_signal(|| initial_dest);
-    let format_enabled = use_signal(|| [true, true, true, true, false]);
-    let sync_convert_to_idx = use_signal(|| None::<usize>);
-    let auto_convert = use_signal(|| true);
-    let syncing = use_signal(|| false);
-    let pulling = use_signal(|| false);
-    let sync_log_entries = use_signal(Vec::<LogEntry>::new);
-    let progress_phase = use_signal(String::new);
-    let progress_current = use_signal(|| 0u32);
-    let progress_total = use_signal(|| 0u32);
-    let jobs = use_signal(|| {
-        std::thread::available_parallelism()
-            .map(|n| n.get())
-            .unwrap_or(4)
-    });
-    let mut sync_status = use_signal(|| None::<sync::SyncStatus>);
-    let mut checking = use_signal(|| false);
-    let mut dest_error = use_signal(|| None::<String>);
+    // Sync state shared via context.
+    use_context_provider(SyncState::new);
+    let state = use_context::<SyncState>();
 
     // Check sync status when destination changes.
     use_effect(move || {
-        let dir = dest_dir();
-        if dir.is_empty() {
-            sync_status.set(None);
-            dest_error.set(None);
-            return;
+        let dir = (state.dest_dir)();
+        if !dir.is_empty() {
+            prefs::save_dest_dir(&dir);
         }
-        prefs::save_dest_dir(&dir);
-        let dest = PathBuf::from(&dir);
-        if !dest.is_dir() {
-            sync_status.set(None);
-            dest_error.set(Some(format!("Cannot access \"{dir}\".")));
-            checking.set(false);
-            return;
-        }
-        dest_error.set(None);
-        let db = paths::db_path();
-        checking.set(true);
-        spawn(async move {
-            match spawn_blocking(move || sync::check_sync_status(&db, &dest)).await {
-                Ok(Ok(status)) => sync_status.set(Some(status)),
-                Ok(Err(e)) => {
-                    sync_status.set(None);
-                    dest_error.set(Some(format!("Error checking device: {e}")));
-                }
-                Err(_) => {
-                    sync_status.set(None);
-                    dest_error.set(Some("Check thread panicked.".to_string()));
-                }
-            }
-            checking.set(false);
-        });
+        check_device(state);
     });
 
     rsx! {
@@ -137,20 +92,6 @@ fn App() -> Element {
             if sync_open() {
                 SyncModal {
                     tracks,
-                    dest_dir,
-                    format_enabled,
-                    convert_to_idx: sync_convert_to_idx,
-                    auto_convert,
-                    syncing,
-                    pulling,
-                    log_entries: sync_log_entries,
-                    progress_phase,
-                    progress_current,
-                    progress_total,
-                    jobs,
-                    sync_status,
-                    checking,
-                    dest_error,
                     on_close: move |_| sync_open.set(false),
                 }
             }

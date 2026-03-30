@@ -6,9 +6,9 @@
 //
 // SPDX-License-Identifier: MPL-2.0
 
-use crate::components::log::{LogEntry, LogPanel};
+use crate::components::log::{LogEntry, LogPanel, log_task_result};
 use crate::prefs::{self, SortKey, SortOrder};
-use crate::task::spawn_blocking;
+use crate::task::{db_op, spawn_blocking};
 use crate::{db, paths, sync};
 use dioxus::prelude::*;
 
@@ -41,17 +41,11 @@ enum ContextTarget {
 
 pub fn refresh_tracks(tracks: &mut Signal<Vec<db::TrackWithFiles>>) {
     let mut tracks = *tracks;
-    let db = paths::db_path();
     spawn(async move {
-        let result = spawn_blocking(move || {
-            db::Library::open(&db)
-                .and_then(|lib| lib.get_all_tracks_with_files())
-                .unwrap_or_default()
-        })
-        .await;
-        if let Ok(t) = result {
-            tracks.set(t);
-        }
+        let t = db_op(|lib| lib.get_all_tracks_with_files())
+            .await
+            .unwrap_or_default();
+        tracks.set(t);
     });
 }
 
@@ -198,14 +192,11 @@ pub fn Library(
             let track_id = track_id.clone();
             drop(w);
 
-            let db = paths::db_path();
             let scroll_id = track_id.clone();
             spawn(async move {
-                let _ = spawn_blocking(move || {
-                    db::Library::open(&db)
-                        .and_then(|lib| lib.update_track(&track_id, &title, &artist, &album, tempo))
-                })
-                .await;
+                let _ =
+                    db_op(move |lib| lib.update_track(&track_id, &title, &artist, &album, tempo))
+                        .await;
             });
 
             let js = format!(
@@ -236,21 +227,15 @@ pub fn Library(
                         log_entries.write().clear();
                         log_entries.write().push(LogEntry::info("Scanning..."));
 
-                        match spawn_blocking(move || sync::import_folder(&db, &input)).await {
-                            Ok(Ok(n)) => {
-                                log_entries.write().push(LogEntry::success(
-                                    &format!("Imported {n} new track(s)."),
-                                ));
-                                refresh_tracks(&mut tracks);
-                            }
-                            Ok(Err(e)) => {
-                                log_entries.write().push(LogEntry::error(
-                                    &format!("Import failed: {e}"),
-                                ));
-                            }
-                            Err(_) => {
-                                log_entries.write().push(LogEntry::error("Import thread panicked."));
-                            }
+                        if log_task_result(
+                            log_entries,
+                            spawn_blocking(move || sync::import_folder(&db, &input)).await,
+                            |n| format!("Imported {n} new track(s)."),
+                            "Import",
+                        )
+                        .is_some()
+                        {
+                            refresh_tracks(&mut tracks);
                         }
                         scanning.set(false);
                     });
@@ -407,13 +392,8 @@ pub fn Library(
                                     }
                                     drop(w);
 
-                                    let db = paths::db_path();
                                     spawn(async move {
-                                        let _ = spawn_blocking(move || {
-                                            db::Library::open(&db)
-                                                .and_then(|lib| lib.delete_file(&file_id))
-                                        })
-                                        .await;
+                                        let _ = db_op(move |lib| lib.delete_file(&file_id)).await;
                                     });
                                 },
                                 "Remove {format} file"
@@ -428,13 +408,8 @@ pub fn Library(
 
                                     tracks.write().retain(|t| t.track.id != track_id);
 
-                                    let db = paths::db_path();
                                     spawn(async move {
-                                        let _ = spawn_blocking(move || {
-                                            db::Library::open(&db)
-                                                .and_then(|lib| lib.delete_track(&track_id))
-                                        })
-                                        .await;
+                                        let _ = db_op(move |lib| lib.delete_track(&track_id)).await;
                                     });
                                 },
                                 "Remove track"

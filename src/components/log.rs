@@ -35,6 +35,31 @@ impl LogEntry {
     }
 }
 
+/// Log the result of a background task and return the success value (if any).
+pub fn log_task_result<T>(
+    mut log: Signal<Vec<LogEntry>>,
+    result: Result<Result<T, impl std::fmt::Display>, impl std::fmt::Display>,
+    success_msg: impl FnOnce(&T) -> String,
+    fail_context: &str,
+) -> Option<T> {
+    match result {
+        Ok(Ok(val)) => {
+            log.write().push(LogEntry::success(&success_msg(&val)));
+            Some(val)
+        }
+        Ok(Err(e)) => {
+            log.write()
+                .push(LogEntry::error(&format!("{fail_context} failed: {e}")));
+            None
+        }
+        Err(e) => {
+            log.write()
+                .push(LogEntry::error(&format!("{fail_context} failed: {e}")));
+            None
+        }
+    }
+}
+
 #[component]
 pub fn LogPanel(entries: Signal<Vec<LogEntry>>) -> Element {
     if entries.read().is_empty() {

@@ -8,9 +8,10 @@
 
 use crate::components::input::Input;
 use crate::components::library::refresh_tracks;
-use crate::components::log::{LogEntry, LogPanel};
+use crate::components::log::{LogEntry, LogPanel, log_task_result};
 use crate::components::select::*;
 use crate::format::SupportedFormat;
+use crate::prefs;
 use crate::task::spawn_blocking;
 use crate::{db, paths, sync};
 use dioxus::prelude::*;
@@ -24,14 +25,103 @@ pub const FORMATS: [(SupportedFormat, &str); 5] = [
     (SupportedFormat::Flac, "FLAC"),
 ];
 
-fn format_label(idx: Option<usize>) -> &'static str {
-    match idx {
-        Some(i) => FORMATS.get(i).map_or("Select a format", |(_, name)| name),
+fn format_label(fmt: Option<SupportedFormat>) -> &'static str {
+    match fmt {
+        Some(f) => FORMATS
+            .iter()
+            .find(|(sf, _)| *sf == f)
+            .map_or("Select a format", |(_, name)| name),
         None => "Select a format",
     }
 }
 
-/// Progress signals shared by sync/pull operations.
+// ── Sync state (lives in App, accessed via context) ──────────────────────────
+
+#[derive(Clone, Copy)]
+pub struct SyncState {
+    pub dest_dir: Signal<String>,
+    pub format_enabled: Signal<[bool; 5]>,
+    pub convert_to: Signal<Option<SupportedFormat>>,
+    pub auto_convert: Signal<bool>,
+    pub syncing: Signal<bool>,
+    pub pulling: Signal<bool>,
+    pub log_entries: Signal<Vec<LogEntry>>,
+    pub progress_phase: Signal<String>,
+    pub progress_current: Signal<u32>,
+    pub progress_total: Signal<u32>,
+    pub jobs: Signal<usize>,
+    pub sync_status: Signal<Option<sync::SyncStatus>>,
+    pub checking: Signal<bool>,
+    pub dest_error: Signal<Option<String>>,
+}
+
+impl SyncState {
+    pub fn new() -> Self {
+        Self {
+            dest_dir: Signal::new(prefs::load_dest_dir()),
+            format_enabled: Signal::new([true, true, true, true, false]),
+            convert_to: Signal::new(None),
+            auto_convert: Signal::new(true),
+            syncing: Signal::new(false),
+            pulling: Signal::new(false),
+            log_entries: Signal::new(Vec::new()),
+            progress_phase: Signal::new(String::new()),
+            progress_current: Signal::new(0),
+            progress_total: Signal::new(0),
+            jobs: Signal::new(
+                std::thread::available_parallelism()
+                    .map(|n| n.get())
+                    .unwrap_or(4),
+            ),
+            sync_status: Signal::new(None),
+            checking: Signal::new(false),
+            dest_error: Signal::new(None),
+        }
+    }
+}
+
+// ── Device check (shared between App use_effect and SyncModal refresh) ───────
+
+/// Trigger a sync-status check against the destination.
+pub fn check_device(state: SyncState) {
+    let dir = (state.dest_dir)();
+    let mut sync_status = state.sync_status;
+    let mut dest_error = state.dest_error;
+    let mut checking = state.checking;
+
+    if dir.is_empty() {
+        sync_status.set(None);
+        dest_error.set(None);
+        return;
+    }
+    let dest = PathBuf::from(&dir);
+    if !dest.is_dir() {
+        sync_status.set(None);
+        dest_error.set(Some(format!("Cannot access \"{dir}\".")));
+        checking.set(false);
+        return;
+    }
+    dest_error.set(None);
+    let db = paths::db_path();
+    checking.set(true);
+    spawn(async move {
+        match spawn_blocking(move || sync::check_sync_status(&db, &dest)).await {
+            Ok(Ok(status)) => sync_status.set(Some(status)),
+            Ok(Err(e)) => {
+                sync_status.set(None);
+                dest_error.set(Some(format!("Error checking device: {e}")));
+            }
+            Err(_) => {
+                sync_status.set(None);
+                dest_error.set(Some("Check thread panicked.".to_string()));
+            }
+        }
+        checking.set(false);
+    });
+}
+
+// ── Progress helper ──────────────────────────────────────────────────────────
+
 struct ProgressSignals {
     phase: Signal<String>,
     current: Signal<u32>,
@@ -75,63 +165,26 @@ async fn run_with_progress<T: Send + 'static>(
     result_rx.await
 }
 
-/// Trigger a sync-status check against the destination.
-fn check_device(
-    dest_dir: &str,
-    mut sync_status: Signal<Option<sync::SyncStatus>>,
-    mut dest_error: Signal<Option<String>>,
-    mut checking: Signal<bool>,
-) {
-    if dest_dir.is_empty() {
-        sync_status.set(None);
-        dest_error.set(None);
-        return;
-    }
-    let dest = PathBuf::from(dest_dir);
-    if !dest.is_dir() {
-        sync_status.set(None);
-        dest_error.set(Some(format!("Cannot access \"{dest_dir}\".")));
-        checking.set(false);
-        return;
-    }
-    dest_error.set(None);
-    let db = paths::db_path();
-    checking.set(true);
-    spawn(async move {
-        match spawn_blocking(move || sync::check_sync_status(&db, &dest)).await {
-            Ok(Ok(status)) => sync_status.set(Some(status)),
-            Ok(Err(e)) => {
-                sync_status.set(None);
-                dest_error.set(Some(format!("Error checking device: {e}")));
-            }
-            Err(_) => {
-                sync_status.set(None);
-                dest_error.set(Some("Check thread panicked.".to_string()));
-            }
-        }
-        checking.set(false);
-    });
-}
+// ── Component ────────────────────────────────────────────────────────────────
 
 #[component]
-pub fn SyncModal(
-    mut tracks: Signal<Vec<db::TrackWithFiles>>,
-    dest_dir: Signal<String>,
-    mut format_enabled: Signal<[bool; 5]>,
-    mut convert_to_idx: Signal<Option<usize>>,
-    mut auto_convert: Signal<bool>,
-    mut syncing: Signal<bool>,
-    mut pulling: Signal<bool>,
-    mut log_entries: Signal<Vec<LogEntry>>,
-    mut progress_phase: Signal<String>,
-    mut progress_current: Signal<u32>,
-    mut progress_total: Signal<u32>,
-    mut jobs: Signal<usize>,
-    mut sync_status: Signal<Option<sync::SyncStatus>>,
-    checking: Signal<bool>,
-    dest_error: Signal<Option<String>>,
-    on_close: EventHandler,
-) -> Element {
+pub fn SyncModal(mut tracks: Signal<Vec<db::TrackWithFiles>>, on_close: EventHandler) -> Element {
+    let state = use_context::<SyncState>();
+    let dest_dir = state.dest_dir;
+    let mut format_enabled = state.format_enabled;
+    let mut convert_to = state.convert_to;
+    let mut auto_convert = state.auto_convert;
+    let mut syncing = state.syncing;
+    let mut pulling = state.pulling;
+    let mut log_entries = state.log_entries;
+    let mut sync_status = state.sync_status;
+    let checking = state.checking;
+    let dest_error = state.dest_error;
+    let mut jobs = state.jobs;
+    let progress_phase = state.progress_phase;
+    let progress_current = state.progress_current;
+    let progress_total = state.progress_total;
+
     // Count tracks that need conversion for the currently selected formats.
     let need_conversion = use_memo(move || {
         let enabled = *format_enabled.read();
@@ -184,7 +237,7 @@ pub fn SyncModal(
                         disabled: busy || checking(),
                         title: "Re-check device",
                         onclick: move |_| {
-                            check_device(&dest_dir(), sync_status, dest_error, checking);
+                            check_device(state);
                         },
                         "↻"
                     }
@@ -263,24 +316,18 @@ pub fn SyncModal(
                             })
                             .await;
 
-                            match result {
-                                Ok(Ok(n)) => {
-                                    log_entries.write().push(LogEntry::success(
-                                        &format!("Pulled {n} track(s) from device."),
-                                    ));
-                                    refresh_tracks(&mut tracks);
-                                    if let Some(mut s) = sync_status() {
-                                        s.to_pull = 0;
-                                        sync_status.set(Some(s));
-                                    }
-                                }
-                                Ok(Err(e)) => {
-                                    log_entries.write().push(LogEntry::error(
-                                        &format!("Pull failed: {e}"),
-                                    ));
-                                }
-                                Err(_) => {
-                                    log_entries.write().push(LogEntry::error("Pull thread panicked."));
+                            if log_task_result(
+                                log_entries,
+                                result,
+                                |n| format!("Pulled {n} track(s) from device."),
+                                "Pull",
+                            )
+                            .is_some()
+                            {
+                                refresh_tracks(&mut tracks);
+                                if let Some(mut s) = sync_status() {
+                                    s.to_pull = 0;
+                                    sync_status.set(Some(s));
                                 }
                             }
                             pulling.set(false);
@@ -326,18 +373,18 @@ pub fn SyncModal(
                             "Convert them during sync to"
                         }
                         if auto_convert() {
-                            Select::<usize> {
-                                on_value_change: move |val: Option<usize>| {
-                                    convert_to_idx.set(val);
+                            Select::<SupportedFormat> {
+                                on_value_change: move |val: Option<SupportedFormat>| {
+                                    convert_to.set(val);
                                 },
                                 SelectTrigger {
-                                    {format_label(convert_to_idx())}
+                                    {format_label(convert_to())}
                                 }
                                 SelectList {
-                                    for (i, (_, name)) in FORMATS.iter().enumerate() {
+                                    for (i, (fmt, name)) in FORMATS.iter().enumerate() {
                                         if format_enabled.read()[i] {
-                                            SelectOption::<usize> {
-                                                value: i,
+                                            SelectOption::<SupportedFormat> {
+                                                value: *fmt,
                                                 index: i,
                                                 text_value: name.to_string(),
                                                 "{name}"
@@ -390,14 +437,13 @@ pub fn SyncModal(
                         return;
                     }
 
-                    let convert_to = if auto_convert() && need_conversion() > 0 {
-                        let Some(idx) = convert_to_idx() else {
+                    let convert_fmt = if auto_convert() && need_conversion() > 0 {
+                        let Some(fmt) = convert_to() else {
                             log_entries.write().push(LogEntry::error(
                                 "Select a conversion target format.",
                             ));
                             return;
                         };
-                        let fmt = FORMATS[idx].0;
                         if !supported.contains(&fmt) {
                             log_entries.write().push(LogEntry::error(
                                 "Conversion target must be one of the allowed formats.",
@@ -411,7 +457,7 @@ pub fn SyncModal(
 
                     let config = sync::SyncConfig {
                         supported_formats: supported,
-                        convert_to,
+                        convert_to: convert_fmt,
                         jobs: jobs(),
                     };
 
@@ -432,28 +478,18 @@ pub fn SyncModal(
                         })
                         .await;
 
-                        match result {
-                            Ok(Ok(result)) => {
-                                log_entries
-                                    .write()
-                                    .push(LogEntry::success(&result.to_string()));
-                                if result.converted > 0 {
-                                    refresh_tracks(&mut tracks);
-                                }
-                                if let Some(mut s) = sync_status() {
-                                    s.to_push = 0;
-                                    sync_status.set(Some(s));
-                                }
+                        if let Some(result) = log_task_result(
+                            log_entries,
+                            result,
+                            |r| r.to_string(),
+                            "Sync",
+                        ) {
+                            if result.converted > 0 {
+                                refresh_tracks(&mut tracks);
                             }
-                            Ok(Err(e)) => {
-                                log_entries
-                                    .write()
-                                    .push(LogEntry::error(&format!("Sync failed: {e}")));
-                            }
-                            Err(_) => {
-                                log_entries
-                                    .write()
-                                    .push(LogEntry::error("Sync thread panicked."));
+                            if let Some(mut s) = sync_status() {
+                                s.to_push = 0;
+                                sync_status.set(Some(s));
                             }
                         }
                         syncing.set(false);

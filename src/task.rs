@@ -16,3 +16,15 @@ pub async fn spawn_blocking<T: Send + 'static>(
     });
     rx.await
 }
+
+/// Open the local database and run a single operation on it in a background thread.
+pub async fn db_op<T: Send + 'static>(
+    f: impl FnOnce(&crate::db::Library) -> rusqlite::Result<T> + Send + 'static,
+) -> Result<T, String> {
+    let db_path = crate::paths::db_path();
+    match spawn_blocking(move || crate::db::Library::open(&db_path).and_then(|lib| f(&lib))).await {
+        Ok(Ok(val)) => Ok(val),
+        Ok(Err(e)) => Err(e.to_string()),
+        Err(_) => Err("Background task panicked".to_string()),
+    }
+}
