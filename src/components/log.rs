@@ -16,13 +16,22 @@ pub struct LogEntry {
 
 impl LogEntry {
     pub fn info(msg: &str) -> Self {
-        Self { message: msg.to_string(), class: "info" }
+        Self {
+            message: msg.to_string(),
+            class: "info",
+        }
     }
     pub fn success(msg: &str) -> Self {
-        Self { message: msg.to_string(), class: "success" }
+        Self {
+            message: msg.to_string(),
+            class: "success",
+        }
     }
     pub fn error(msg: &str) -> Self {
-        Self { message: msg.to_string(), class: "error" }
+        Self {
+            message: msg.to_string(),
+            class: "error",
+        }
     }
 }
 

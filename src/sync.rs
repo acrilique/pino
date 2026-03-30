@@ -666,8 +666,14 @@ pub fn check_sync_status(db_path: &Path, dest_dir: &Path) -> Result<SyncStatus, 
 
     let remote_ids: HashSet<String> = remote_db.get_track_ids()?.into_iter().collect();
 
-    let to_push = local_ids.iter().filter(|id| !remote_ids.contains(*id)).count() as u32;
-    let to_pull = remote_ids.iter().filter(|id| !local_ids.contains(*id)).count() as u32;
+    let to_push = local_ids
+        .iter()
+        .filter(|id| !remote_ids.contains(*id))
+        .count() as u32;
+    let to_pull = remote_ids
+        .iter()
+        .filter(|id| !local_ids.contains(*id))
+        .count() as u32;
 
     Ok(SyncStatus {
         to_push,
@@ -876,7 +882,11 @@ fn read_metadata(path: &Path, fallback_title: &str) -> AudioMeta {
 }
 
 /// Read audio properties from a destination file (for converted tracks).
-fn read_audio_properties(path: &Path, fallback_sample_rate: u32, fallback_bitrate: u32) -> AudioMeta {
+fn read_audio_properties(
+    path: &Path,
+    fallback_sample_rate: u32,
+    fallback_bitrate: u32,
+) -> AudioMeta {
     read_metadata(path, &file_stem_string(path))
         .with_fallback_properties(fallback_sample_rate, fallback_bitrate)
 }

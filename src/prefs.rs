@@ -94,7 +94,11 @@ pub fn load_col_widths() -> Option<Vec<f64>> {
         .split(',')
         .filter_map(|s| s.parse().ok())
         .collect();
-    if widths.is_empty() { None } else { Some(widths) }
+    if widths.is_empty() {
+        None
+    } else {
+        Some(widths)
+    }
 }
 
 pub fn save_col_widths(widths: &str) {

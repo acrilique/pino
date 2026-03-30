@@ -202,9 +202,8 @@ pub fn Library(
             let scroll_id = track_id.clone();
             spawn(async move {
                 let _ = spawn_blocking(move || {
-                    db::Library::open(&db).and_then(|lib| {
-                        lib.update_track(&track_id, &title, &artist, &album, tempo)
-                    })
+                    db::Library::open(&db)
+                        .and_then(|lib| lib.update_track(&track_id, &title, &artist, &album, tempo))
                 })
                 .await;
             });
