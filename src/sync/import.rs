@@ -51,21 +51,11 @@ pub struct ImportResult {
     pub warnings: Vec<String>,
 }
 
-/// Scan a folder and import all audio files into the local database.
-///
-/// Returns the number of newly imported tracks.
-pub fn import_folder(db_path: &Path, input_dir: &Path) -> Result<ImportResult, SyncError> {
-    let db = Library::open(db_path)?;
-
-    let all_formats = SupportedFormat::ALL.to_vec();
-    let mut audio_files = Vec::new();
-    find_audio_files(input_dir, &all_formats, true, &mut audio_files)?;
-    audio_files.sort_by(|(a, _), (b, _)| a.cmp(b));
-
+fn import_tracks(db: &Library, audio_files: &[(PathBuf, Option<SupportedFormat>)]) -> ImportResult {
     let mut imported = 0u32;
     let warnings = SyncWarnings::new();
 
-    for (src_path, src_format) in &audio_files {
+    for (src_path, src_format) in audio_files {
         let path_str = src_path.to_string_lossy().to_string();
         if db.has_file_path(&path_str).unwrap_or(false) {
             continue;
@@ -119,8 +109,43 @@ pub fn import_folder(db_path: &Path, input_dir: &Path) -> Result<ImportResult, S
         imported += 1;
     }
 
-    Ok(ImportResult {
+    ImportResult {
         imported,
         warnings: warnings.into_vec(),
-    })
+    }
+}
+
+fn classify_file(path: PathBuf) -> Option<(PathBuf, Option<SupportedFormat>)> {
+    let ext = path.extension()?.to_str()?.to_ascii_lowercase();
+    if let Ok(fmt) = SupportedFormat::try_from(ext.as_str()) {
+        Some((path, Some(fmt)))
+    } else if is_known_audio_extension(&ext) {
+        Some((path, None))
+    } else {
+        None
+    }
+}
+
+/// Scan a folder and import all audio files into the local database.
+///
+/// Returns the number of newly imported tracks.
+pub fn import_folder(db_path: &Path, input_dir: &Path) -> Result<ImportResult, SyncError> {
+    let db = Library::open(db_path)?;
+
+    let all_formats = SupportedFormat::ALL.to_vec();
+    let mut audio_files = Vec::new();
+    find_audio_files(input_dir, &all_formats, true, &mut audio_files)?;
+    audio_files.sort_by(|(a, _), (b, _)| a.cmp(b));
+
+    Ok(import_tracks(&db, &audio_files))
+}
+
+/// Import specific audio files into the local database.
+pub fn import_files(db_path: &Path, paths: Vec<PathBuf>) -> Result<ImportResult, SyncError> {
+    let db = Library::open(db_path)?;
+
+    let mut audio_files: Vec<_> = paths.into_iter().filter_map(classify_file).collect();
+    audio_files.sort_by(|(a, _), (b, _)| a.cmp(b));
+
+    Ok(import_tracks(&db, &audio_files))
 }

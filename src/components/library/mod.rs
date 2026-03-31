@@ -137,8 +137,8 @@ pub fn Library(
 
         div { class: "library-header",
             button {
-                class: "add-btn",
-                title: "Import tracks",
+                class: "icon-btn",
+                title: "Import folder",
                 disabled: scanning(),
                 onclick: move |_| {
                     spawn(async move {
@@ -169,15 +169,101 @@ pub fn Library(
                         scanning.set(false);
                     });
                 },
-                if scanning() { "..." } else { "+" }
+                span {
+                    svg {
+                        width: "16",
+                        height: "16",
+                        view_box: "0 0 24 24",
+                        fill: "none",
+                        path {
+                            d: "M13 7L11.8845 4.76892C11.5634 4.1268 11.4029 3.80573 11.1634 3.57116C10.9516 3.36373 10.6963 3.20597 10.4161 3.10931C10.0992 3 9.74021 3 9.02229 3H5.2C4.0799 3 3.51984 3 3.09202 3.21799C2.71569 3.40973 2.40973 3.71569 2.21799 4.09202C2 4.51984 2 5.0799 2 6.2V7M2 7H17.2C18.8802 7 19.7202 7 20.362 7.32698C20.9265 7.6146 21.3854 8.07354 21.673 8.63803C22 9.27976 22 10.1198 22 11.8V16.2C22 17.8802 22 18.7202 21.673 19.362C21.3854 19.9265 20.9265 20.3854 20.362 20.673C19.7202 21 18.8802 21 17.2 21H6.8C5.11984 21 4.27976 21 3.63803 20.673C3.07354 20.3854 2.6146 19.9265 2.32698 19.362C2 18.7202 2 17.8802 2 16.2V7ZM12 17V11M9 14H15",
+                            stroke: "currentColor",
+                            stroke_width: "2",
+                            stroke_linecap: "round",
+                            stroke_linejoin: "round"
+                        }
+                    }
+                }
             }
             button {
-                class: "sync-btn",
+                class: "icon-btn",
+                title: "Import files",
+                disabled: scanning(),
+                onclick: move |_| {
+                    spawn(async move {
+                        let Some(files) = rfd::AsyncFileDialog::new()
+                            .add_filter("Audio files", &[
+                                "mp3", "wav", "aiff", "aif", "aac", "m4a",
+                                "flac", "ogg", "wma", "opus",
+                            ])
+                            .pick_files()
+                            .await
+                        else {
+                            return;
+                        };
+                        let paths: Vec<_> = files.iter().map(|f| f.path().to_path_buf()).collect();
+                        let db = paths::db_path();
+                        scanning.set(true);
+                        log_entries.write().clear();
+                        log_entries.write().push(LogEntry::info("Importing..."));
+
+                        if log_task_result(
+                            log_entries,
+                            spawn_blocking(move || sync::import_files(&db, paths)).await,
+                            |r: &sync::ImportResult| format!("Imported {} new track(s).", r.imported),
+                            "Import",
+                        )
+                        .is_some_and(|r| {
+                            for w in &r.warnings {
+                                log_entries.write().push(LogEntry::warning(w));
+                            }
+                            r.imported > 0
+                        })
+                        {
+                            refresh_tracks(&mut tracks);
+                        }
+                        scanning.set(false);
+                    });
+                },
+                span {
+                    svg {
+                        width: "16",
+                        height: "16",
+                        view_box: "0 0 24 24",
+                        fill: "none",
+                        path {
+                            d: "M14.5 18V5.58888C14.5 4.73166 14.5 4.30306 14.6805 4.04492C14.8382 3.81952 15.0817 3.669 15.3538 3.6288C15.6655 3.58276 16.0488 3.77444 16.8155 4.1578L20.5 6.00003M14.5 18C14.5 19.6569 13.1569 21 11.5 21C9.84315 21 8.5 19.6569 8.5 18C8.5 16.3432 9.84315 15 11.5 15C13.1569 15 14.5 16.3432 14.5 18ZM6.5 10V4.00003M3.5 7.00003H9.5",
+                            stroke: "currentColor",
+                            stroke_width: "2",
+                            stroke_linecap: "round",
+                            stroke_linejoin: "round"
+                        }
+                    }
+                }
+            }
+            button {
+                class: "icon-btn",
                 title: "Sync to USB",
                 onclick: move |_| on_sync.call(()),
-                "➤"
+                span {
+                    svg {
+                        width: "16",
+                        height: "16",
+                        view_box: "0 0 24 24",
+                        fill: "none",
+                        path {
+                            d: "M10.4995 13.5002L20.9995 3.00017M10.6271 13.8282L13.2552 20.5862C13.4867 21.1816 13.6025 21.4793 13.7693 21.5662C13.9139 21.6415 14.0862 21.6416 14.2308 21.5664C14.3977 21.4797 14.5139 21.1822 14.7461 20.5871L21.3364 3.69937C21.5461 3.16219 21.6509 2.8936 21.5935 2.72197C21.5437 2.57292 21.4268 2.45596 21.2777 2.40616C21.1061 2.34883 20.8375 2.45364 20.3003 2.66327L3.41258 9.25361C2.8175 9.48584 2.51997 9.60195 2.43326 9.76886C2.35809 9.91354 2.35819 10.0858 2.43353 10.2304C2.52043 10.3972 2.81811 10.513 3.41345 10.7445L10.1715 13.3726C10.2923 13.4196 10.3527 13.4431 10.4036 13.4794C10.4487 13.5115 10.4881 13.551 10.5203 13.5961C10.5566 13.647 10.5801 13.7074 10.6271 13.8282Z",
+                            stroke: "currentColor",
+                            stroke_width: "2",
+                            stroke_linecap: "round",
+                            stroke_linejoin: "round"
+                        }
+                    }
+                }
             }
-            p { class: "track-count", "{tracks.read().len()} track(s) in library" }
+            p { class: "track-count",
+                if scanning() { "Scanning..." } else { "{tracks.read().len()} track(s) in library" }
+            }
         }
 
         LogPanel { entries: log_entries }

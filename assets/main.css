@@ -203,25 +203,32 @@ input[type="checkbox"] {
     width: 80px;
 }
 
-.sync-btn {
+.icon-btn {
     background: var(--accent-strong);
     color: var(--text-primary);
     border: none;
     border-radius: 50%;
     width: 32px;
     height: 32px;
-    font-size: 18px;
     line-height: 1;
     cursor: pointer;
     display: flex;
     align-items: center;
     justify-content: center;
     flex-shrink: 0;
-    padding: 0 0 2px;
 }
 
-.sync-btn:hover {
+.icon-btn span {
+    display: flex;
+}
+
+.icon-btn:hover {
     background: var(--accent-hover);
+}
+
+.icon-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
 }
 
 .modal-backdrop {
@@ -344,31 +351,7 @@ input[type="checkbox"] {
     margin-left: auto;
 }
 
-.add-btn {
-    background: var(--accent-strong);
-    color: var(--text-primary);
-    border: none;
-    border-radius: 50%;
-    width: 32px;
-    height: 32px;
-    font-size: 20px;
-    font-weight: 600;
-    line-height: 1;
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    flex-shrink: 0;
-}
 
-.add-btn:hover {
-    background: var(--accent-hover);
-}
-
-.add-btn:disabled {
-    opacity: 0.4;
-    cursor: not-allowed;
-}
 
 .track-list {
     overflow-y: auto;

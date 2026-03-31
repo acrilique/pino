@@ -11,7 +11,7 @@ mod pdb;
 mod pull;
 mod push;
 
-pub use import::{ImportResult, import_folder};
+pub use import::{ImportResult, import_files, import_folder};
 pub use pull::{PullResult, pull_from_remote};
 pub use push::{SyncConfig, SyncResult, sync};
 
