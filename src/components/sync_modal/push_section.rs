@@ -11,7 +11,7 @@ use crate::components::log::{LogEntry, log_task_result};
 use crate::components::select::{Select, SelectList, SelectOption, SelectTrigger};
 use crate::format::SupportedFormat;
 use crate::task::{ProgressHandle, run_with_progress};
-use crate::{db, paths, sync};
+use crate::{db, ffmpeg, paths, sync};
 use dioxus::prelude::*;
 use std::path::PathBuf;
 
@@ -34,6 +34,55 @@ pub fn PushSection(
     let progress_phase = state.progress_phase;
     let progress_current = state.progress_current;
     let progress_total = state.progress_total;
+
+    let mut ffmpeg_missing = use_signal(|| false);
+    let mut start_sync = move |convert_fmt: Option<SupportedFormat>| {
+        let enabled = *format_enabled.read();
+        let supported = enabled_formats(enabled);
+        let dest = PathBuf::from(dest_dir());
+
+        let config = sync::SyncConfig {
+            supported_formats: supported,
+            convert_to: convert_fmt,
+            jobs: jobs(),
+        };
+
+        let db = paths::db_path();
+        log_entries.write().clear();
+        ffmpeg_missing.set(false);
+        syncing.set(true);
+
+        let mut progress = ProgressHandle::new(
+            progress_phase, progress_current, progress_total,
+        );
+        progress.reset();
+
+        spawn(async move {
+            let result = run_with_progress(&mut progress, move |callback| {
+                sync::sync(&db, &dest, &config, &callback)
+            })
+            .await;
+
+            if let Some(result) = log_task_result(
+                log_entries,
+                result,
+                |r: &sync::SyncResult| r.to_string(),
+                "Sync",
+            ) {
+                for w in &result.warnings {
+                    log_entries.write().push(LogEntry::warning(w));
+                }
+                if result.converted > 0 {
+                    refresh_tracks(&mut tracks);
+                }
+                if let Some(mut s) = sync_status() {
+                    s.to_push = 0;
+                    sync_status.set(Some(s));
+                }
+            }
+            syncing.set(false);
+        });
+    };
 
     rsx! {
         div { class: "field",
@@ -120,7 +169,6 @@ pub fn PushSection(
             onclick: move |_| {
                 let enabled = *format_enabled.read();
                 let supported = enabled_formats(enabled);
-                let dest = PathBuf::from(dest_dir());
 
                 if supported.is_empty() {
                     log_entries
@@ -147,48 +195,28 @@ pub fn PushSection(
                     None
                 };
 
-                let config = sync::SyncConfig {
-                    supported_formats: supported,
-                    convert_to: convert_fmt,
-                    jobs: jobs(),
-                };
+                if convert_fmt.is_some() && !ffmpeg::check_available() {
+                    log_entries.write().clear();
+                    log_entries.write().push(LogEntry::error(
+                        "ffmpeg is required for audio conversion but was not found in PATH.",
+                    ));
+                    ffmpeg_missing.set(true);
+                    return;
+                }
 
-                let db = paths::db_path();
-                log_entries.write().clear();
-                syncing.set(true);
-
-                let mut progress = ProgressHandle::new(
-                    progress_phase, progress_current, progress_total,
-                );
-                progress.reset();
-
-                spawn(async move {
-                    let result = run_with_progress(&mut progress, move |callback| {
-                        sync::sync(&db, &dest, &config, &callback)
-                    })
-                    .await;
-
-                    if let Some(result) = log_task_result(
-                        log_entries,
-                        result,
-                        |r: &sync::SyncResult| r.to_string(),
-                        "Sync",
-                    ) {
-                        for w in &result.warnings {
-                            log_entries.write().push(LogEntry::warning(w));
-                        }
-                        if result.converted > 0 {
-                            refresh_tracks(&mut tracks);
-                        }
-                        if let Some(mut s) = sync_status() {
-                            s.to_push = 0;
-                            sync_status.set(Some(s));
-                        }
-                    }
-                    syncing.set(false);
-                });
+                start_sync(convert_fmt);
             },
             if syncing() { "Pushing..." } else { "Push to device" }
+        }
+
+        if ffmpeg_missing() && !syncing() {
+            button {
+                class: "export-btn",
+                onclick: move |_| {
+                    start_sync(None);
+                },
+                "Push without conversion"
+            }
         }
     }
 }

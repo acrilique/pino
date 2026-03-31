@@ -52,7 +52,6 @@ pub enum SyncError {
     Db(rusqlite::Error),
     Io(std::io::Error),
     Pdb(rekordcrate::Error),
-    FfmpegNotFound,
     NoRemoteDb,
     Overflow,
 }
@@ -63,12 +62,6 @@ impl fmt::Display for SyncError {
             Self::Db(e) => write!(f, "Database error: {e}"),
             Self::Io(e) => write!(f, "I/O error: {e}"),
             Self::Pdb(e) => write!(f, "PDB generation failed: {e}"),
-            Self::FfmpegNotFound => {
-                write!(
-                    f,
-                    "ffmpeg is required for audio conversion but was not found in PATH"
-                )
-            }
             Self::NoRemoteDb => write!(f, "No pino database found on this device"),
             Self::Overflow => write!(f, "Numeric value exceeds supported range"),
         }
@@ -298,25 +291,32 @@ pub(crate) fn read_metadata(
         Err(e) => {
             let filename = path.file_name().unwrap_or_default().to_string_lossy();
             warnings.push(format!("lofty could not read metadata for {filename}: {e}"));
-            if let Some(meta) = ffmpeg::probe_metadata(path) {
-                warnings.push("Using ffprobe metadata fallback".to_string());
-                AudioMeta {
-                    title: meta.title.unwrap_or_else(|| fallback_title.to_string()),
-                    artist: meta.artist.unwrap_or_default(),
-                    album: meta.album.unwrap_or_default(),
-                    duration_secs: meta.duration_secs,
-                    sample_rate: meta.sample_rate,
-                    bitrate: meta.bitrate,
+            match ffmpeg::probe_metadata(path) {
+                Ok(meta) => {
+                    warnings.push(format!(
+                        "{filename}: using ffprobe metadata fallback"
+                    ));
+                    AudioMeta {
+                        title: meta.title.unwrap_or_else(|| fallback_title.to_string()),
+                        artist: meta.artist.unwrap_or_default(),
+                        album: meta.album.unwrap_or_default(),
+                        duration_secs: meta.duration_secs,
+                        sample_rate: meta.sample_rate,
+                        bitrate: meta.bitrate,
+                    }
                 }
-            } else {
-                warnings.push("ffprobe fallback also failed, using defaults".to_string());
-                AudioMeta {
-                    title: fallback_title.to_string(),
-                    artist: String::new(),
-                    album: String::new(),
-                    duration_secs: 0,
-                    sample_rate: 44100,
-                    bitrate: 0,
+                Err(probe_err) => {
+                    warnings.push(format!(
+                        "{filename}: ffprobe fallback also failed ({probe_err}), using defaults"
+                    ));
+                    AudioMeta {
+                        title: fallback_title.to_string(),
+                        artist: String::new(),
+                        album: String::new(),
+                        duration_secs: 0,
+                        sample_rate: 44100,
+                        bitrate: 0,
+                    }
                 }
             }
         }

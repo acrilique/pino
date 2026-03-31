@@ -88,9 +88,6 @@ pub fn sync(
     on_progress: &(dyn Fn(SyncProgress) + Sync),
 ) -> Result<SyncResult, SyncError> {
     let warnings = SyncWarnings::new();
-    if config.convert_to.is_some() && !ffmpeg::check_available() {
-        return Err(SyncError::FfmpegNotFound);
-    }
 
     let local_db = Library::open(db_path)?;
 

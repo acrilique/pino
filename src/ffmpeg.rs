@@ -57,7 +57,7 @@ pub struct ProbeMetadata {
 }
 
 /// Extract metadata via ffprobe as a fallback when lofty fails.
-pub fn probe_metadata(path: &Path) -> Option<ProbeMetadata> {
+pub fn probe_metadata(path: &Path) -> Result<ProbeMetadata, String> {
     let output = std::process::Command::new("ffprobe")
         .args(["-v", "error", "-show_entries"])
         .arg("format=duration,bit_rate")
@@ -67,10 +67,11 @@ pub fn probe_metadata(path: &Path) -> Option<ProbeMetadata> {
         .args(["-of", "default=noprint_wrappers=1:nokey=0"])
         .arg(path)
         .output()
-        .ok()?;
+        .map_err(|e| format!("failed to run ffprobe: {e}"))?;
 
     if !output.status.success() {
-        return None;
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("ffprobe exited with error: {}", stderr.trim()));
     }
 
     let text = String::from_utf8_lossy(&output.stdout);
@@ -126,7 +127,7 @@ pub fn probe_metadata(path: &Path) -> Option<ProbeMetadata> {
         }
     }
 
-    Some(ProbeMetadata {
+    Ok(ProbeMetadata {
         title,
         artist,
         album,
