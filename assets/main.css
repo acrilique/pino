@@ -150,6 +150,22 @@ input[type="checkbox"] {
     line-height: 1.6;
 }
 
+.modal-body .log {
+    margin-top: 0;
+    max-height: none;
+    border: none;
+    background: none;
+    padding: 0;
+}
+
+.warnings-log {
+    overflow-x: auto;
+}
+
+.warnings-log p {
+    white-space: nowrap;
+}
+
 .log p {
     margin: 0;
     white-space: pre-wrap;
@@ -166,6 +182,15 @@ input[type="checkbox"] {
 
 .log .info {
     color: var(--info);
+}
+
+.log .warning {
+    background: none;
+    border: none;
+    border-radius: 0;
+    padding: 0;
+    margin-bottom: 0;
+    color: var(--warning);
 }
 
 .progress-section {

@@ -16,7 +16,6 @@ mod sync;
 mod task;
 
 use components::library::Library;
-use components::log::LogEntry;
 use components::sync_modal::{SyncModal, SyncState, check_device};
 use dioxus::prelude::*;
 
@@ -53,7 +52,6 @@ fn App() -> Element {
 
     // Library state.
     let scanning = use_signal(|| false);
-    let lib_log_entries = use_signal(Vec::<LogEntry>::new);
     let (initial_key, initial_order) = prefs::load_sort_prefs();
     let sort_key = use_signal(|| initial_key);
     let sort_order = use_signal(|| initial_order);
@@ -80,7 +78,6 @@ fn App() -> Element {
             Library {
                 tracks,
                 scanning,
-                log_entries: lib_log_entries,
                 sort_key,
                 sort_order,
                 on_sync: move |()| sync_open.set(true),

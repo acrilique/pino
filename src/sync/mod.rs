@@ -11,7 +11,7 @@ mod pdb;
 mod pull;
 mod push;
 
-pub use import::{ImportResult, import_files, import_folder};
+pub use import::{import_files, import_folder};
 pub use pull::{PullResult, pull_from_remote};
 pub use push::{SyncConfig, SyncResult, sync};
 
@@ -293,9 +293,7 @@ pub(crate) fn read_metadata(
             warnings.push(format!("lofty could not read metadata for {filename}: {e}"));
             match ffmpeg::probe_metadata(path) {
                 Ok(meta) => {
-                    warnings.push(format!(
-                        "{filename}: using ffprobe metadata fallback"
-                    ));
+                    warnings.push(format!("{filename}: using ffprobe metadata fallback"));
                     AudioMeta {
                         title: meta.title.unwrap_or_else(|| fallback_title.to_string()),
                         artist: meta.artist.unwrap_or_default(),

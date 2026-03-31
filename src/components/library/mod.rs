@@ -9,7 +9,6 @@
 mod editable_cell;
 mod sortable_header;
 
-use crate::components::log::{LogEntry, LogPanel, log_task_result};
 use crate::prefs::{self, SortKey, SortOrder};
 use crate::task::{db_op, spawn_blocking};
 use crate::{db, paths, sync};
@@ -61,7 +60,6 @@ enum ContextTarget {
 pub fn Library(
     mut tracks: Signal<Vec<db::TrackWithFiles>>,
     mut scanning: Signal<bool>,
-    mut log_entries: Signal<Vec<LogEntry>>,
     sort_key: Signal<SortKey>,
     sort_order: Signal<SortOrder>,
     on_sync: EventHandler,
@@ -69,6 +67,7 @@ pub fn Library(
     let mut editing = use_signal(|| None::<(String, EditColumn)>);
     let edit_value = use_signal(String::new);
     let mut context_menu = use_signal(|| None::<ContextMenu>);
+    let mut import_warnings: Signal<Vec<String>> = use_signal(Vec::new);
     let col_widths = prefs::load_col_widths().unwrap_or_default();
 
     let sorted_tracks = use_memo(move || {
@@ -148,23 +147,14 @@ pub fn Library(
                         let input = folder.path().to_path_buf();
                         let db = paths::db_path();
                         scanning.set(true);
-                        log_entries.write().clear();
-                        log_entries.write().push(LogEntry::info("Scanning..."));
 
-                        if log_task_result(
-                            log_entries,
-                            spawn_blocking(move || sync::import_folder(&db, &input)).await,
-                            |r: &sync::ImportResult| format!("Imported {} new track(s).", r.imported),
-                            "Import",
-                        )
-                        .is_some_and(|r| {
-                            for w in &r.warnings {
-                                log_entries.write().push(LogEntry::warning(w));
+                        if let Ok(Ok(r)) = spawn_blocking(move || sync::import_folder(&db, &input)).await {
+                            if !r.warnings.is_empty() {
+                                import_warnings.set(r.warnings);
                             }
-                            r.imported > 0
-                        })
-                        {
-                            refresh_tracks(&mut tracks);
+                            if r.imported > 0 {
+                                refresh_tracks(&mut tracks);
+                            }
                         }
                         scanning.set(false);
                     });
@@ -204,23 +194,14 @@ pub fn Library(
                         let paths: Vec<_> = files.iter().map(|f| f.path().to_path_buf()).collect();
                         let db = paths::db_path();
                         scanning.set(true);
-                        log_entries.write().clear();
-                        log_entries.write().push(LogEntry::info("Importing..."));
 
-                        if log_task_result(
-                            log_entries,
-                            spawn_blocking(move || sync::import_files(&db, paths)).await,
-                            |r: &sync::ImportResult| format!("Imported {} new track(s).", r.imported),
-                            "Import",
-                        )
-                        .is_some_and(|r| {
-                            for w in &r.warnings {
-                                log_entries.write().push(LogEntry::warning(w));
+                        if let Ok(Ok(r)) = spawn_blocking(move || sync::import_files(&db, paths)).await {
+                            if !r.warnings.is_empty() {
+                                import_warnings.set(r.warnings);
                             }
-                            r.imported > 0
-                        })
-                        {
-                            refresh_tracks(&mut tracks);
+                            if r.imported > 0 {
+                                refresh_tracks(&mut tracks);
+                            }
                         }
                         scanning.set(false);
                     });
@@ -266,7 +247,31 @@ pub fn Library(
             }
         }
 
-        LogPanel { entries: log_entries }
+        if !import_warnings.read().is_empty() {
+            div {
+                class: "modal-backdrop",
+                onclick: move |_| import_warnings.write().clear(),
+            }
+            div { class: "modal",
+                div { class: "modal-header",
+                    h2 { "Import warnings" }
+                    div { class: "modal-header-actions",
+                        button {
+                            class: "modal-close",
+                            onclick: move |_| import_warnings.write().clear(),
+                            "×"
+                        }
+                    }
+                }
+                div { class: "modal-body",
+                    div { class: "log warnings-log",
+                        for w in import_warnings() {
+                            p { class: "warning", "{w}" }
+                        }
+                    }
+                }
+            }
+        }
 
         if !tracks.read().is_empty() {
             div {

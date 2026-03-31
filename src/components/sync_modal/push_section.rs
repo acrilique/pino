@@ -52,9 +52,7 @@ pub fn PushSection(
         ffmpeg_missing.set(false);
         syncing.set(true);
 
-        let mut progress = ProgressHandle::new(
-            progress_phase, progress_current, progress_total,
-        );
+        let mut progress = ProgressHandle::new(progress_phase, progress_current, progress_total);
         progress.reset();
 
         spawn(async move {
@@ -104,7 +102,7 @@ pub fn PushSection(
             }
         }
 
-        if need_conversion() > 0 {
+        if need_conversion() > 0 && !ffmpeg_missing() {
             div { class: "warning",
                 p {
                     "{need_conversion()} track(s) have no file in any of the selected formats."
@@ -163,10 +161,22 @@ pub fn PushSection(
             }
         }
 
+        if ffmpeg_missing() && !syncing() {
+            p { class: "error",
+                "ffmpeg is required for audio conversion but was not found in PATH."
+            }
+        }
+
         button {
             class: "export-btn",
             disabled: syncing() || (state.pulling)(),
             onclick: move |_| {
+                if ffmpeg_missing() {
+                    ffmpeg_missing.set(false);
+                    start_sync(None);
+                    return;
+                }
+
                 let enabled = *format_enabled.read();
                 let supported = enabled_formats(enabled);
 
@@ -196,26 +206,17 @@ pub fn PushSection(
                 };
 
                 if convert_fmt.is_some() && !ffmpeg::check_available() {
-                    log_entries.write().clear();
-                    log_entries.write().push(LogEntry::error(
-                        "ffmpeg is required for audio conversion but was not found in PATH.",
-                    ));
                     ffmpeg_missing.set(true);
-                    return;
+                } else {
+                    start_sync(convert_fmt);
                 }
-
-                start_sync(convert_fmt);
             },
-            if syncing() { "Pushing..." } else { "Push to device" }
-        }
-
-        if ffmpeg_missing() && !syncing() {
-            button {
-                class: "export-btn",
-                onclick: move |_| {
-                    start_sync(None);
-                },
-                "Push without conversion"
+            if syncing() {
+                "Pushing..."
+            } else if ffmpeg_missing() {
+                {format!("Push without conversion (skip {} files)", need_conversion())}
+            } else {
+                "Push to device"
             }
         }
     }
