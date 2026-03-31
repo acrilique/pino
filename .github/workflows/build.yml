@@ -17,6 +17,9 @@ jobs:
                     - os: windows-latest
                       package-types: msi
                       no-strip: false
+                    - os: macos-latest
+                      package-types: dmg
+                      no-strip: false
         runs-on: ${{ matrix.os }}
         permissions:
             contents: read
@@ -30,16 +33,68 @@ jobs:
                   sudo apt-get update
                   sudo apt-get install -y build-essential libwebkit2gtk-4.1-dev libayatana-appindicator3-dev curl wget file libxdo-dev libssl-dev librsvg2-dev lld
 
+            - name: Import signing certificate
+              if: runner.os == 'macOS'
+              env:
+                  APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+                  APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+              run: |
+                  CERTIFICATE_PATH="$RUNNER_TEMP/certificate.p12"
+                  KEYCHAIN_PATH="$RUNNER_TEMP/signing.keychain-db"
+                  KEYCHAIN_PASSWORD="$(openssl rand -base64 32)"
+
+                  echo "$APPLE_CERTIFICATE" | base64 --decode > "$CERTIFICATE_PATH"
+
+                  security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+                  security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+                  security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+                  security import "$CERTIFICATE_PATH" -P "$APPLE_CERTIFICATE_PASSWORD" \
+                      -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+                  security set-key-partition-list -S apple-tool:,apple: \
+                      -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+                  security list-keychains -d user -s "$KEYCHAIN_PATH" login.keychain-db
+
             - name: Print Rust version
               run: rustc -vV
 
+            - name: Install cargo-binstall
+              if: runner.os == 'Windows'
+              shell: pwsh
+              run: Set-ExecutionPolicy Unrestricted -Scope Process; iex (iwr "https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.ps1").Content
+
+            - name: Install cargo-binstall
+              if: runner.os != 'Windows'
+              run: curl -L --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh | bash
+
             - name: Install Dioxus CLI
-              run: cargo install dioxus-cli --locked
+              run: cargo binstall dioxus-cli --no-confirm
 
             - name: Bundle app
               run: dx bundle --release --desktop --package-types "${{ matrix.package-types }}"
               env:
                   NO_STRIP: ${{ matrix.no-strip }}
+                  APPLE_SIGNING_IDENTITY: "Developer ID Application: Lluc Simó Margalef (BJPC4PHT7X)"
+
+            - name: Notarize DMG
+              if: runner.os == 'macOS'
+              env:
+                  APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+                  APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+                  APPLE_API_KEY_BASE64: ${{ secrets.APPLE_API_KEY_BASE64 }}
+              run: |
+                  API_KEY_PATH="$RUNNER_TEMP/AuthKey.p8"
+                  echo "$APPLE_API_KEY_BASE64" | base64 --decode > "$API_KEY_PATH"
+
+                  DMG_PATH=$(find target/dx/pino/bundle/macos -name "*.dmg" | head -1)
+
+                  xcrun notarytool submit "$DMG_PATH" \
+                      --key "$API_KEY_PATH" \
+                      --key-id "$APPLE_API_KEY" \
+                      --issuer "$APPLE_API_ISSUER" \
+                      --wait
+
+                  xcrun stapler staple "$DMG_PATH"
 
             - name: Upload artifacts (Linux)
               if: runner.os == 'Linux'
@@ -54,3 +109,14 @@ jobs:
               with:
                   name: pino-${{ runner.os }}
                   path: target/dx/pino/bundle/windows/msi/Pino_*.msi
+
+            - name: Upload artifacts (macOS)
+              if: runner.os == 'macOS'
+              uses: actions/upload-artifact@v7
+              with:
+                  name: pino-${{ runner.os }}
+                  path: target/dx/pino/bundle/macos/**/*.dmg
+
+            - name: Clean up keychain
+              if: runner.os == 'macOS' && always()
+              run: security delete-keychain "$RUNNER_TEMP/signing.keychain-db"
