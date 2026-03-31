@@ -6,7 +6,7 @@ Built with [Dioxus](https://dioxuslabs.com/).
 
 ## Features
 
-- SQLite-backed music library with batch import from folders
+- SQLite-backed music library
 - Audio format conversion via FFmpeg (MP3, M4A, etc.)
 - Bidirectional sync with USB devices (pull from device, push to device)
 - Metadata extraction (currently just title, artist and album)
