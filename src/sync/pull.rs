@@ -6,11 +6,17 @@
 //
 // SPDX-License-Identifier: MPL-2.0
 
-use super::{SyncError, SyncProgress, new_id, open_remote_db, today, unique_path};
+use super::{SyncError, SyncProgress, SyncWarnings, new_id, open_remote_db, today, unique_path};
 use crate::db::{Library, TrackFile, TrackWithFiles};
 use crate::paths;
 use std::collections::HashSet;
 use std::path::Path;
+
+/// Pull result including count plus any warnings.
+pub struct PullResult {
+    pub pulled: u32,
+    pub warnings: Vec<String>,
+}
 
 /// Import tracks from the remote (USB) into the local library.
 ///
@@ -20,7 +26,7 @@ pub fn pull_from_remote(
     db_path: &Path,
     dest_dir: &Path,
     on_progress: &(dyn Fn(SyncProgress) + Sync),
-) -> Result<u32, SyncError> {
+) -> Result<PullResult, SyncError> {
     let local_db = Library::open(db_path)?;
     let remote_db = open_remote_db(dest_dir)?.ok_or(SyncError::NoRemoteDb)?;
 
@@ -33,27 +39,30 @@ pub fn pull_from_remote(
         .collect();
 
     if to_pull.is_empty() {
-        return Ok(0);
+        return Ok(PullResult {
+            pulled: 0,
+            warnings: Vec::new(),
+        });
     }
 
     let import_dir = paths::data_dir().join("imported");
     std::fs::create_dir_all(&import_dir)?;
 
     let contents_dir = dest_dir.join("Contents");
-    let today = today();
-    let total = to_pull.len() as u32;
+    let warnings = SyncWarnings::new();
+    let total = u32::try_from(to_pull.len())?;
     let mut pulled = 0u32;
 
     for (i, twf) in to_pull.iter().enumerate() {
         on_progress(SyncProgress {
             phase: "Pulling from device",
-            current: (i + 1) as u32,
+            current: u32::try_from(i + 1)?,
             total,
         });
 
         // Insert the track metadata.
         if let Err(e) = local_db.add_track(&twf.track) {
-            eprintln!("  Warning: failed to add track: {e}");
+            warnings.push(format!("Failed to add track: {e}"));
             continue;
         }
 
@@ -62,10 +71,10 @@ pub fn pull_from_remote(
         for remote_file in &twf.files {
             let src = contents_dir.join(&remote_file.file_path);
             if !src.exists() {
-                eprintln!(
-                    "  Warning: file not found on device: {}",
+                warnings.push(format!(
+                    "File not found on device: {}",
                     remote_file.file_path
-                );
+                ));
                 continue;
             }
 
@@ -78,7 +87,7 @@ pub fn pull_from_remote(
             };
 
             if let Err(e) = std::fs::copy(&src, &dest) {
-                eprintln!("  Warning: copy failed: {e}");
+                warnings.push(format!("Copy failed: {e}"));
                 continue;
             }
 
@@ -90,11 +99,11 @@ pub fn pull_from_remote(
                 file_size: remote_file.file_size,
                 sample_rate: remote_file.sample_rate,
                 bitrate: remote_file.bitrate,
-                added_at: today.clone(),
+                added_at: today(),
             };
 
             if let Err(e) = local_db.add_file(&local_file) {
-                eprintln!("  Warning: failed to register file: {e}");
+                warnings.push(format!("Failed to register file: {e}"));
                 continue;
             }
             any_file_ok = true;
@@ -105,5 +114,8 @@ pub fn pull_from_remote(
         }
     }
 
-    Ok(pulled)
+    Ok(PullResult {
+        pulled,
+        warnings: warnings.into_vec(),
+    })
 }

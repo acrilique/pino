@@ -104,7 +104,11 @@ pub fn probe_metadata(path: &Path) -> Option<ProbeMetadata> {
                 }
                 "duration" => {
                     if let Ok(d) = val.trim().parse::<f64>() {
-                        duration_secs = d as u16;
+                        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                        {
+                            duration_secs = u16::try_from(d.clamp(0.0, f64::from(u16::MAX)) as u64)
+                                .unwrap_or(u16::MAX);
+                        }
                     }
                 }
                 "sample_rate" => {
@@ -114,7 +118,7 @@ pub fn probe_metadata(path: &Path) -> Option<ProbeMetadata> {
                 }
                 "bit_rate" => {
                     if let Ok(br) = val.trim().parse::<u64>() {
-                        bitrate = (br / 1000) as u32;
+                        bitrate = u32::try_from(br / 1000).unwrap_or(u32::MAX);
                     }
                 }
                 _ => {}

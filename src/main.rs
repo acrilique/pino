@@ -19,7 +19,6 @@ use components::library::Library;
 use components::log::LogEntry;
 use components::sync_modal::{SyncModal, SyncState, check_device};
 use dioxus::prelude::*;
-use std::path::PathBuf;
 
 fn main() {
     let custom_head = format!(
@@ -31,9 +30,7 @@ fn main() {
         include_str!("components/select/style.css"),
     );
 
-    let data_dir = dirs::data_local_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("pino");
+    let data_dir = paths::data_dir();
 
     dioxus::LaunchBuilder::new()
         .with_cfg(
@@ -71,7 +68,7 @@ fn App() -> Element {
         if !dir.is_empty() {
             prefs::save_dest_dir(&dir);
         }
-        check_device(state);
+        check_device(&state);
     });
 
     rsx! {
@@ -86,13 +83,13 @@ fn App() -> Element {
                 log_entries: lib_log_entries,
                 sort_key,
                 sort_order,
-                on_sync: move |_| sync_open.set(true),
+                on_sync: move |()| sync_open.set(true),
             }
 
             if sync_open() {
                 SyncModal {
                     tracks,
-                    on_close: move |_| sync_open.set(false),
+                    on_close: move |()| sync_open.set(false),
                 }
             }
         }

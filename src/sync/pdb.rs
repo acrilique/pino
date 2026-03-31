@@ -7,14 +7,19 @@
 // SPDX-License-Identifier: MPL-2.0
 
 use super::{SyncError, today};
-use crate::db::Library;
+use crate::db::{Library, TrackWithFiles};
 use crate::format::SupportedFormat;
 use rekordcrate::pdb::io::Database;
 use rekordcrate::pdb::string::DeviceSQLString;
-use rekordcrate::pdb::*;
+use rekordcrate::pdb::{
+    Album, Artist, DatabaseType, History, PageType, PlainPageType, PlainRow, Row, Subtype,
+};
 use std::collections::HashMap;
 use std::fs::File;
 use std::path::Path;
+
+type ArtistMap = HashMap<String, u32>;
+type AlbumMap = HashMap<(String, u32), u32>;
 
 /// Generate a Pioneer PDB database from all tracks in the given library.
 pub(super) fn generate_pdb(db: &Library, dest_dir: &Path) -> Result<(), SyncError> {
@@ -27,13 +32,47 @@ pub(super) fn generate_pdb(db: &Library, dest_dir: &Path) -> Result<(), SyncErro
     let rekordbox_dir = dest_dir.join("PIONEER").join("rekordbox");
     std::fs::create_dir_all(&rekordbox_dir)?;
 
-    // Build artist and album maps with sequential IDs.
-    let mut artist_map: HashMap<String, u32> = HashMap::new();
+    let (artist_map, album_map) = build_id_maps(&all);
+
+    let mut pdb = create_pdb(&rekordbox_dir)?;
+
+    let today = today();
+    let exported_count = insert_tracks(&mut pdb, &all, &artist_map, &album_map, &today)?;
+    insert_artists_and_albums(&mut pdb, &artist_map, &album_map)?;
+
+    rekordcrate::pdb::defaults::insert_default_colors(&mut pdb)?;
+    rekordcrate::pdb::defaults::insert_default_columns(&mut pdb)?;
+    rekordcrate::pdb::defaults::insert_default_menus(&mut pdb)?;
+
+    pdb.add_row(Row::Plain(PlainRow::History(History {
+        subtype: Subtype(640),
+        index_shift: 0,
+        num_tracks: exported_count,
+        date: today.parse()?,
+        version: "1000".parse()?,
+        label: DeviceSQLString::empty(),
+    })))?;
+
+    pdb.close()?;
+
+    println!(
+        "PDB: {} track(s), {} artist(s), {} album(s)",
+        exported_count,
+        artist_map.len(),
+        album_map.len(),
+    );
+
+    Ok(())
+}
+
+/// Build sequential ID maps for artists and albums from the track list.
+fn build_id_maps(all: &[TrackWithFiles]) -> (ArtistMap, AlbumMap) {
+    let mut artist_map: ArtistMap = HashMap::new();
     let mut next_artist_id: u32 = 1;
-    let mut album_map: HashMap<(String, u32), u32> = HashMap::new();
+    let mut album_map: AlbumMap = HashMap::new();
     let mut next_album_id: u32 = 1;
 
-    for twf in &all {
+    for twf in all {
         let track = &twf.track;
         if !track.artist.is_empty() && !artist_map.contains_key(&track.artist) {
             artist_map.insert(track.artist.clone(), next_artist_id);
@@ -53,7 +92,11 @@ pub(super) fn generate_pdb(db: &Library, dest_dir: &Path) -> Result<(), SyncErro
         }
     }
 
-    // PDB table layout matching real rekordbox exports.
+    (artist_map, album_map)
+}
+
+/// Create the PDB file with the standard rekordbox table layout.
+fn create_pdb(rekordbox_dir: &Path) -> Result<Database<File>, SyncError> {
     let table_page_types = vec![
         PageType::Plain(PlainPageType::Tracks),
         PageType::Plain(PlainPageType::Genres),
@@ -79,13 +122,25 @@ pub(super) fn generate_pdb(db: &Library, dest_dir: &Path) -> Result<(), SyncErro
 
     let pdb_path = rekordbox_dir.join("export.pdb");
     let pdb_file = File::create(&pdb_path)?;
-    let mut pdb = Database::create(pdb_file, DatabaseType::Plain, &table_page_types)?;
+    Ok(Database::create(
+        pdb_file,
+        DatabaseType::Plain,
+        &table_page_types,
+    )?)
+}
 
+/// Insert track rows into the PDB, returning the number of successfully exported tracks.
+fn insert_tracks(
+    pdb: &mut Database<File>,
+    all: &[TrackWithFiles],
+    artist_map: &ArtistMap,
+    album_map: &AlbumMap,
+    today: &str,
+) -> Result<u32, SyncError> {
     let mut exported_count: u32 = 0;
-    let today = today();
-    for twf in &all {
+
+    for twf in all {
         let track = &twf.track;
-        // Use the first file entry (remote DB has exactly one per track).
         let Some(file) = twf.files.first() else {
             continue;
         };
@@ -137,13 +192,20 @@ pub(super) fn generate_pdb(db: &Library, dest_dir: &Path) -> Result<(), SyncErro
                     "  Warning: track '{}' skipped in PDB: row too small",
                     file.file_path
                 );
-                continue;
             }
             Err(err) => return Err(err.into()),
         }
     }
 
-    // Insert artist rows.
+    Ok(exported_count)
+}
+
+/// Insert artist and album rows into the PDB, sorted by their assigned IDs.
+fn insert_artists_and_albums(
+    pdb: &mut Database<File>,
+    artist_map: &ArtistMap,
+    album_map: &AlbumMap,
+) -> Result<(), SyncError> {
     let mut artists_sorted: Vec<_> = artist_map.iter().collect();
     artists_sorted.sort_by_key(|&(_, &id)| id);
     for (name, &id) in artists_sorted {
@@ -151,7 +213,6 @@ pub(super) fn generate_pdb(db: &Library, dest_dir: &Path) -> Result<(), SyncErro
         pdb.add_row(Row::Plain(PlainRow::Artist(artist)))?;
     }
 
-    // Insert album rows.
     let mut albums_sorted: Vec<_> = album_map.iter().collect();
     albums_sorted.sort_by_key(|&(_, &id)| id);
     for ((album_name, artist_id), &id) in albums_sorted {
@@ -162,28 +223,6 @@ pub(super) fn generate_pdb(db: &Library, dest_dir: &Path) -> Result<(), SyncErro
             .build();
         pdb.add_row(Row::Plain(PlainRow::Album(album)))?;
     }
-
-    rekordcrate::pdb::defaults::insert_default_colors(&mut pdb)?;
-    rekordcrate::pdb::defaults::insert_default_columns(&mut pdb)?;
-    rekordcrate::pdb::defaults::insert_default_menus(&mut pdb)?;
-
-    pdb.add_row(Row::Plain(PlainRow::History(History {
-        subtype: Subtype(640),
-        index_shift: 0,
-        num_tracks: exported_count,
-        date: today.parse()?,
-        version: "1000".parse()?,
-        label: DeviceSQLString::empty(),
-    })))?;
-
-    pdb.close()?;
-
-    println!(
-        "PDB: {} track(s), {} artist(s), {} album(s)",
-        exported_count,
-        artist_map.len(),
-        album_map.len(),
-    );
 
     Ok(())
 }

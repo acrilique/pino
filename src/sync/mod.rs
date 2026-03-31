@@ -11,9 +11,9 @@ mod pdb;
 mod pull;
 mod push;
 
-pub use import::import_folder;
-pub use pull::pull_from_remote;
-pub use push::{SyncConfig, sync};
+pub use import::{ImportResult, import_folder};
+pub use pull::{PullResult, pull_from_remote};
+pub use push::{SyncConfig, SyncResult, sync};
 
 use crate::db::{Library, TrackFile};
 use crate::ffmpeg;
@@ -23,6 +23,27 @@ use lofty::prelude::*;
 use std::collections::HashSet;
 use std::fmt;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+
+// ── Warnings collector ───────────────────────────────────────────────────────
+
+/// Thread-safe collector for non-fatal warnings during sync operations.
+#[derive(Default)]
+pub struct SyncWarnings(Mutex<Vec<String>>);
+
+impl SyncWarnings {
+    pub fn new() -> Self {
+        Self(Mutex::new(Vec::new()))
+    }
+
+    pub fn push(&self, msg: impl Into<String>) {
+        self.0.lock().unwrap().push(msg.into());
+    }
+
+    pub fn into_vec(self) -> Vec<String> {
+        self.0.into_inner().unwrap()
+    }
+}
 
 // ── Error ────────────────────────────────────────────────────────────────────
 
@@ -33,6 +54,7 @@ pub enum SyncError {
     Pdb(rekordcrate::Error),
     FfmpegNotFound,
     NoRemoteDb,
+    Overflow,
 }
 
 impl fmt::Display for SyncError {
@@ -48,6 +70,7 @@ impl fmt::Display for SyncError {
                 )
             }
             Self::NoRemoteDb => write!(f, "No pino database found on this device"),
+            Self::Overflow => write!(f, "Numeric value exceeds supported range"),
         }
     }
 }
@@ -73,6 +96,12 @@ impl From<rekordcrate::Error> for SyncError {
 impl From<rekordcrate::pdb::string::StringError> for SyncError {
     fn from(e: rekordcrate::pdb::string::StringError) -> Self {
         Self::Pdb(e.into())
+    }
+}
+
+impl From<std::num::TryFromIntError> for SyncError {
+    fn from(_: std::num::TryFromIntError) -> Self {
+        Self::Overflow
     }
 }
 
@@ -102,7 +131,7 @@ pub fn check_sync_status(db_path: &Path, dest_dir: &Path) -> Result<SyncStatus, 
 
     let Some(remote_db) = open_remote_db(dest_dir)? else {
         return Ok(SyncStatus {
-            to_push: local_ids.len() as u32,
+            to_push: u32::try_from(local_ids.len())?,
             to_pull: 0,
             has_remote_db: false,
         });
@@ -110,14 +139,18 @@ pub fn check_sync_status(db_path: &Path, dest_dir: &Path) -> Result<SyncStatus, 
 
     let remote_ids: HashSet<String> = remote_db.get_track_ids()?.into_iter().collect();
 
-    let to_push = local_ids
-        .iter()
-        .filter(|id| !remote_ids.contains(*id))
-        .count() as u32;
-    let to_pull = remote_ids
-        .iter()
-        .filter(|id| !local_ids.contains(*id))
-        .count() as u32;
+    let to_push = u32::try_from(
+        local_ids
+            .iter()
+            .filter(|id| !remote_ids.contains(*id))
+            .count(),
+    )?;
+    let to_pull = u32::try_from(
+        remote_ids
+            .iter()
+            .filter(|id| !local_ids.contains(*id))
+            .count(),
+    )?;
 
     Ok(SyncStatus {
         to_push,
@@ -169,7 +202,9 @@ pub(crate) fn open_remote_db(dest_dir: &Path) -> Result<Option<Library>, SyncErr
 }
 
 pub(crate) fn file_size_on_disk(path: &Path) -> u32 {
-    std::fs::metadata(path).map(|m| m.len() as u32).unwrap_or(0)
+    std::fs::metadata(path)
+        .map(|m| u32::try_from(m.len()).unwrap_or(u32::MAX))
+        .unwrap_or(0)
 }
 
 pub(crate) fn unique_path(path: &Path) -> PathBuf {
@@ -228,7 +263,11 @@ impl AudioMeta {
 }
 
 /// Read audio metadata from a file (lofty with ffprobe fallback).
-pub(crate) fn read_metadata(path: &Path, fallback_title: &str) -> AudioMeta {
+pub(crate) fn read_metadata(
+    path: &Path,
+    fallback_title: &str,
+    warnings: &SyncWarnings,
+) -> AudioMeta {
     match lofty::read_from_path(path) {
         Ok(tagged_file) => {
             let tag = tagged_file
@@ -251,36 +290,33 @@ pub(crate) fn read_metadata(path: &Path, fallback_title: &str) -> AudioMeta {
                 title,
                 artist,
                 album,
-                duration_secs: properties.duration().as_secs() as u16,
+                duration_secs: u16::try_from(properties.duration().as_secs()).unwrap_or(u16::MAX),
                 sample_rate: properties.sample_rate().unwrap_or(44100),
                 bitrate: properties.overall_bitrate().unwrap_or(320),
             }
         }
         Err(e) => {
             let filename = path.file_name().unwrap_or_default().to_string_lossy();
-            eprintln!("  Warning: lofty could not read metadata for {filename}: {e}");
-            match ffmpeg::probe_metadata(path) {
-                Some(meta) => {
-                    eprintln!("    Using ffprobe metadata fallback");
-                    AudioMeta {
-                        title: meta.title.unwrap_or_else(|| fallback_title.to_string()),
-                        artist: meta.artist.unwrap_or_default(),
-                        album: meta.album.unwrap_or_default(),
-                        duration_secs: meta.duration_secs,
-                        sample_rate: meta.sample_rate,
-                        bitrate: meta.bitrate,
-                    }
+            warnings.push(format!("lofty could not read metadata for {filename}: {e}"));
+            if let Some(meta) = ffmpeg::probe_metadata(path) {
+                warnings.push("Using ffprobe metadata fallback".to_string());
+                AudioMeta {
+                    title: meta.title.unwrap_or_else(|| fallback_title.to_string()),
+                    artist: meta.artist.unwrap_or_default(),
+                    album: meta.album.unwrap_or_default(),
+                    duration_secs: meta.duration_secs,
+                    sample_rate: meta.sample_rate,
+                    bitrate: meta.bitrate,
                 }
-                None => {
-                    eprintln!("    ffprobe fallback also failed, using defaults");
-                    AudioMeta {
-                        title: fallback_title.to_string(),
-                        artist: String::new(),
-                        album: String::new(),
-                        duration_secs: 0,
-                        sample_rate: 44100,
-                        bitrate: 0,
-                    }
+            } else {
+                warnings.push("ffprobe fallback also failed, using defaults".to_string());
+                AudioMeta {
+                    title: fallback_title.to_string(),
+                    artist: String::new(),
+                    album: String::new(),
+                    duration_secs: 0,
+                    sample_rate: 44100,
+                    bitrate: 0,
                 }
             }
         }
@@ -292,7 +328,8 @@ pub(crate) fn read_audio_properties(
     path: &Path,
     fallback_sample_rate: u32,
     fallback_bitrate: u32,
+    warnings: &SyncWarnings,
 ) -> AudioMeta {
-    read_metadata(path, &file_stem_string(path))
+    read_metadata(path, &file_stem_string(path), warnings)
         .with_fallback_properties(fallback_sample_rate, fallback_bitrate)
 }

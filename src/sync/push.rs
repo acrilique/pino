@@ -7,7 +7,7 @@
 // SPDX-License-Identifier: MPL-2.0
 
 use super::{
-    SyncError, SyncProgress, converted_dir, file_size_on_disk, file_stem_string,
+    SyncError, SyncProgress, SyncWarnings, converted_dir, file_size_on_disk, file_stem_string,
     find_file_in_formats, new_id, pdb, read_audio_properties, remote_db_path, today,
     unique_path_batch,
 };
@@ -32,6 +32,7 @@ pub struct SyncResult {
     pub converted: u32,
     pub skipped: u32,
     pub updated: u32,
+    pub warnings: Vec<String>,
 }
 
 impl std::fmt::Display for SyncResult {
@@ -86,6 +87,7 @@ pub fn sync(
     config: &SyncConfig,
     on_progress: &(dyn Fn(SyncProgress) + Sync),
 ) -> Result<SyncResult, SyncError> {
+    let warnings = SyncWarnings::new();
     if config.convert_to.is_some() && !ffmpeg::check_available() {
         return Err(SyncError::FfmpegNotFound);
     }
@@ -118,6 +120,7 @@ pub fn sync(
             converted: 0,
             skipped: 0,
             updated,
+            warnings: warnings.into_vec(),
         });
     }
 
@@ -130,8 +133,8 @@ pub fn sync(
     std::fs::create_dir_all(&conv_dir)?;
 
     let (prepared, mut skipped) =
-        prepare_sync_items(&to_sync, config, &mut used_filenames, &conv_dir);
-    let convert_ok = convert_prepared_items(&prepared, config.jobs, on_progress);
+        prepare_sync_items(&to_sync, config, &mut used_filenames, &conv_dir, &warnings);
+    let convert_ok = convert_prepared_items(&prepared, config.jobs, on_progress, &warnings)?;
     let (synced, converted, copy_skipped) = copy_to_destination(
         &prepared,
         &convert_ok,
@@ -139,7 +142,8 @@ pub fn sync(
         &local_db,
         &remote_db,
         on_progress,
-    );
+        &warnings,
+    )?;
     skipped += copy_skipped;
 
     // === PDB Phase ===
@@ -155,6 +159,7 @@ pub fn sync(
         converted,
         skipped,
         updated,
+        warnings: warnings.into_vec(),
     })
 }
 
@@ -180,15 +185,7 @@ fn update_remote_metadata(
                 || local.album != remote.album
                 || local.tempo != remote.tempo)
         {
-            remote_db
-                .update_track(
-                    &local.id,
-                    &local.title,
-                    &local.artist,
-                    &local.album,
-                    local.tempo,
-                )
-                .ok();
+            remote_db.update_track_from(local).ok();
             updated += 1;
         }
     }
@@ -202,6 +199,7 @@ fn prepare_sync_items<'a>(
     config: &SyncConfig,
     used_filenames: &mut HashMap<String, u32>,
     conv_dir: &Path,
+    warnings: &SyncWarnings,
 ) -> (Vec<PreparedItem<'a>>, u32) {
     let mut prepared: Vec<PreparedItem> = Vec::new();
     let mut skipped = 0u32;
@@ -228,7 +226,7 @@ fn prepare_sync_items<'a>(
 
         let src_path = PathBuf::from(&src_file.file_path);
         if !src_path.exists() {
-            eprintln!("  Warning: source file not found: {}", src_file.file_path);
+            warnings.push(format!("Source file not found: {}", src_file.file_path));
             skipped += 1;
             continue;
         }
@@ -243,7 +241,7 @@ fn prepare_sync_items<'a>(
             if *count == 1 {
                 base
             } else {
-                format!("{original_stem}_{}.{dest_ext}", count)
+                format!("{original_stem}_{count}.{dest_ext}")
             }
         };
 
@@ -273,11 +271,13 @@ fn run_conversions(
     jobs: &[ConvertJob],
     num_workers: usize,
     on_progress: &(dyn Fn(SyncProgress) + Sync),
-) -> Vec<bool> {
+    warnings: &SyncWarnings,
+) -> Result<Vec<bool>, SyncError> {
     let total = jobs.len();
     if total == 0 {
-        return vec![];
+        return Ok(vec![]);
     }
+    let total_u32 = u32::try_from(total)?;
     let results: Vec<std::sync::Mutex<bool>> =
         (0..total).map(|_| std::sync::Mutex::new(false)).collect();
     let next_idx = AtomicUsize::new(0);
@@ -296,27 +296,25 @@ fn run_conversions(
                     match ffmpeg::convert(job.src, job.dest, job.format) {
                         Ok(()) => *results[idx].lock().unwrap() = true,
                         Err(e) => {
-                            eprintln!(
-                                "  Warning: conversion failed for {}: {e}",
-                                job.src.display()
-                            );
+                            warnings
+                                .push(format!("Conversion failed for {}: {e}", job.src.display()));
                         }
                     }
                     let done = done_count.fetch_add(1, Ordering::Relaxed) + 1;
                     on_progress(SyncProgress {
                         phase: "Converting files",
                         current: done,
-                        total: total as u32,
+                        total: total_u32,
                     });
                 }
             });
         }
     });
 
-    results
+    Ok(results
         .into_iter()
         .map(|m| m.into_inner().unwrap())
-        .collect()
+        .collect())
 }
 
 /// Run parallel ffmpeg conversions for items that need them.
@@ -326,7 +324,8 @@ fn convert_prepared_items(
     prepared: &[PreparedItem],
     jobs: usize,
     on_progress: &(dyn Fn(SyncProgress) + Sync),
-) -> Vec<bool> {
+    warnings: &SyncWarnings,
+) -> Result<Vec<bool>, SyncError> {
     let items_to_convert: Vec<usize> = prepared
         .iter()
         .enumerate()
@@ -341,12 +340,12 @@ fn convert_prepared_items(
             format: prepared[i].dest_format,
         })
         .collect();
-    let conv_results = run_conversions(&conv_jobs, jobs, on_progress);
+    let conv_results = run_conversions(&conv_jobs, jobs, on_progress, warnings)?;
     let mut convert_ok = vec![false; prepared.len()];
     for (job_idx, &prep_idx) in items_to_convert.iter().enumerate() {
         convert_ok[prep_idx] = conv_results[job_idx];
     }
-    convert_ok
+    Ok(convert_ok)
 }
 
 /// Copy (or move converted) files to the destination and register them in both databases.
@@ -359,9 +358,10 @@ fn copy_to_destination(
     local_db: &Library,
     remote_db: &Library,
     on_progress: &(dyn Fn(SyncProgress) + Sync),
-) -> (u32, u32, u32) {
-    let today = today();
-    let copy_total = prepared.len() as u32;
+    warnings: &SyncWarnings,
+) -> Result<(u32, u32, u32), SyncError> {
+    let _today_str = today();
+    let copy_total = u32::try_from(prepared.len())?;
     let mut synced = 0u32;
     let mut converted = 0u32;
     let mut skipped = 0u32;
@@ -369,7 +369,7 @@ fn copy_to_destination(
     for (i, item) in prepared.iter().enumerate() {
         on_progress(SyncProgress {
             phase: "Copying files",
-            current: (i + 1) as u32,
+            current: u32::try_from(i + 1)?,
             total: copy_total,
         });
 
@@ -387,6 +387,7 @@ fn copy_to_destination(
                 &item.local_conv_path,
                 item.src_file.sample_rate,
                 item.src_file.bitrate,
+                warnings,
             );
             sample_rate = conv_meta.sample_rate;
             bitrate = conv_meta.bitrate;
@@ -400,13 +401,13 @@ fn copy_to_destination(
                 file_size: file_size_on_disk(&item.local_conv_path),
                 sample_rate,
                 bitrate,
-                added_at: today.clone(),
+                added_at: today(),
             };
             local_db.add_file(&local_file).ok();
 
             // Copy converted file to destination.
             if let Err(e) = std::fs::copy(&item.local_conv_path, &dest_path) {
-                eprintln!("  Warning: copy failed for converted file: {e}");
+                warnings.push(format!("Copy failed for converted file: {e}"));
                 skipped += 1;
                 continue;
             }
@@ -416,10 +417,7 @@ fn copy_to_destination(
             bitrate = item.src_file.bitrate;
 
             if let Err(e) = std::fs::copy(&item.src_path, &dest_path) {
-                eprintln!(
-                    "  Warning: copy failed for {}: {e}",
-                    item.src_file.file_path
-                );
+                warnings.push(format!("Copy failed for {}: {e}", item.src_file.file_path));
                 skipped += 1;
                 continue;
             }
@@ -435,7 +433,7 @@ fn copy_to_destination(
             album: item.track.album.clone(),
             duration_secs: item.track.duration_secs,
             tempo: item.track.tempo,
-            added_at: today.clone(),
+            added_at: today(),
         };
 
         let remote_file = TrackFile {
@@ -446,17 +444,17 @@ fn copy_to_destination(
             file_size,
             sample_rate,
             bitrate,
-            added_at: today.clone(),
+            added_at: today(),
         };
 
         remote_db.add_track(&remote_track).ok();
         if let Err(e) = remote_db.add_file(&remote_file) {
-            eprintln!("  Warning: failed to add file to remote DB: {e}");
+            warnings.push(format!("Failed to add file to remote DB: {e}"));
             continue;
         }
 
         synced += 1;
     }
 
-    (synced, converted, skipped)
+    Ok((synced, converted, skipped))
 }

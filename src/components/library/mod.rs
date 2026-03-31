@@ -6,22 +6,40 @@
 //
 // SPDX-License-Identifier: MPL-2.0
 
+mod editable_cell;
+mod sortable_header;
+
 use crate::components::log::{LogEntry, LogPanel, log_task_result};
 use crate::prefs::{self, SortKey, SortOrder};
 use crate::task::{db_op, spawn_blocking};
 use crate::{db, paths, sync};
 use dioxus::prelude::*;
 
-/// Identifies a cell being edited: (track index, column key).
-#[derive(Clone, Copy, PartialEq)]
-pub enum EditColumn {
-    Title,
-    Artist,
-    Album,
+pub use editable_cell::EditColumn;
+use editable_cell::EditableCell;
+use sortable_header::SortableHeader;
+
+pub fn refresh_tracks(tracks: &mut Signal<Vec<db::TrackWithFiles>>) {
+    let mut tracks = *tracks;
+    spawn(async move {
+        let t = db_op(db::Library::get_all_tracks_with_files)
+            .await
+            .unwrap_or_default();
+        tracks.set(t);
+    });
 }
 
+fn format_duration(secs: u16) -> String {
+    format!("{}:{:02}", secs / 60, secs % 60)
+}
+
+const JS_TRACK_LIST_INIT: &str = include_str!("../../../assets/track-list.js");
+
+const JS_COL_WIDTH_LISTENER: &str =
+    r"window.__pino_save_widths = function(csv) { dioxus.send(csv); };";
+
 #[derive(Clone, PartialEq)]
-pub struct ContextMenu {
+struct ContextMenu {
     x: f64,
     y: f64,
     target: ContextTarget,
@@ -38,93 +56,6 @@ enum ContextTarget {
         track_id: String,
     },
 }
-
-pub fn refresh_tracks(tracks: &mut Signal<Vec<db::TrackWithFiles>>) {
-    let mut tracks = *tracks;
-    spawn(async move {
-        let t = db_op(|lib| lib.get_all_tracks_with_files())
-            .await
-            .unwrap_or_default();
-        tracks.set(t);
-    });
-}
-
-fn format_duration(secs: u16) -> String {
-    format!("{}:{:02}", secs / 60, secs % 60)
-}
-
-// --- Inline JS ---
-
-const JS_TRACK_LIST_INIT: &str = r#"
-(function() {
-    const el = document.getElementById('track-list');
-    if (!el) return;
-    function resize() {
-        const top = el.getBoundingClientRect().top;
-        el.style.height = (window.innerHeight - top - 34) + 'px';
-    }
-    resize();
-    window.__pino_resize = resize;
-    window.addEventListener('resize', resize);
-
-    var resizing = null;
-    el.addEventListener('mousedown', function(e) {
-        if (!e.target.classList.contains('col-resizer')) return;
-        e.preventDefault();
-        var th = e.target.closest('th');
-        if (!th) return;
-        var nextTh = th.nextElementSibling;
-        if (!nextTh) return;
-        var allThs = Array.from(th.parentElement.children);
-        allThs.forEach(function(c) { c.style.width = c.offsetWidth + 'px'; });
-        resizing = {
-            th: th,
-            handle: e.target,
-            startX: e.pageX,
-            startWidth: th.offsetWidth,
-            nextTh: nextTh,
-            nextWidth: nextTh ? nextTh.offsetWidth : 0
-        };
-        e.target.classList.add('active');
-        document.body.style.cursor = 'col-resize';
-        document.body.style.userSelect = 'none';
-    });
-    document.addEventListener('mousemove', function(e) {
-        if (!resizing) return;
-        e.preventDefault();
-        var delta = e.pageX - resizing.startX;
-        var maxGrow = resizing.nextTh ? resizing.nextWidth - 40 : 0;
-        var maxShrink = resizing.startWidth - 40;
-        delta = Math.max(-maxShrink, Math.min(delta, maxGrow));
-        resizing.th.style.width = (resizing.startWidth + delta) + 'px';
-        if (resizing.nextTh) {
-            resizing.nextTh.style.width = (resizing.nextWidth - delta) + 'px';
-        }
-    });
-    document.addEventListener('mouseup', function() {
-        if (resizing) {
-            resizing.handle.classList.remove('active');
-            resizing = null;
-            document.body.style.cursor = '';
-            document.body.style.userSelect = '';
-            var table = el.querySelector('table');
-            if (table) {
-                var ths = Array.from(table.querySelector('thead tr').children);
-                var tableW = table.offsetWidth;
-                if (tableW > 0) {
-                    var pcts = ths.map(function(th) {
-                        return (th.offsetWidth / tableW * 100).toFixed(2);
-                    });
-                    if (window.__pino_save_widths) window.__pino_save_widths(pcts.join(','));
-                }
-            }
-        }
-    });
-})()
-"#;
-
-const JS_COL_WIDTH_LISTENER: &str =
-    r#"window.__pino_save_widths = function(csv) { dioxus.send(csv); };"#;
 
 #[component]
 pub fn Library(
@@ -181,27 +112,20 @@ pub fn Library(
         let mut w = tracks.write();
         if let Some(twf) = w.iter_mut().find(|t| t.track.id == track_id) {
             match col {
-                EditColumn::Title => twf.track.title = new_val.clone(),
-                EditColumn::Artist => twf.track.artist = new_val.clone(),
-                EditColumn::Album => twf.track.album = new_val.clone(),
+                EditColumn::Title => twf.track.title.clone_from(&new_val),
+                EditColumn::Artist => twf.track.artist.clone_from(&new_val),
+                EditColumn::Album => twf.track.album.clone_from(&new_val),
             }
-            let title = twf.track.title.clone();
-            let artist = twf.track.artist.clone();
-            let album = twf.track.album.clone();
-            let tempo = twf.track.tempo;
-            let track_id = track_id.clone();
+            let track = twf.track.clone();
             drop(w);
 
-            let scroll_id = track_id.clone();
+            let scroll_id = track.id.clone();
             spawn(async move {
-                let _ =
-                    db_op(move |lib| lib.update_track(&track_id, &title, &artist, &album, tempo))
-                        .await;
+                let _ = db_op(move |lib| lib.update_track_from(&track)).await;
             });
 
             let js = format!(
-                "setTimeout(() => document.getElementById('track-{}')?.scrollIntoView({{block:'nearest',behavior:'smooth'}}), 50)",
-                scroll_id
+                "setTimeout(() => document.getElementById('track-{scroll_id}')?.scrollIntoView({{block:'nearest',behavior:'smooth'}}), 50)"
             );
             document::eval(&js);
         }
@@ -230,10 +154,15 @@ pub fn Library(
                         if log_task_result(
                             log_entries,
                             spawn_blocking(move || sync::import_folder(&db, &input)).await,
-                            |n| format!("Imported {n} new track(s)."),
+                            |r: &sync::ImportResult| format!("Imported {} new track(s).", r.imported),
                             "Import",
                         )
-                        .is_some()
+                        .is_some_and(|r| {
+                            for w in &r.warnings {
+                                log_entries.write().push(LogEntry::warning(w));
+                            }
+                            r.imported > 0
+                        })
                         {
                             refresh_tracks(&mut tracks);
                         }
@@ -310,7 +239,7 @@ pub fn Library(
                                             value: twf.track.title.clone(),
                                             editing,
                                             edit_value,
-                                            on_commit: move |_| commit_edit(),
+                                            on_commit: move |()| commit_edit(),
                                         }
                                         EditableCell {
                                             track_id: track_id.clone(),
@@ -318,7 +247,7 @@ pub fn Library(
                                             value: twf.track.artist.clone(),
                                             editing,
                                             edit_value,
-                                            on_commit: move |_| commit_edit(),
+                                            on_commit: move |()| commit_edit(),
                                         }
                                         EditableCell {
                                             track_id: track_id.clone(),
@@ -326,7 +255,7 @@ pub fn Library(
                                             value: twf.track.album.clone(),
                                             editing,
                                             edit_value,
-                                            on_commit: move |_| commit_edit(),
+                                            on_commit: move |()| commit_edit(),
                                         }
                                         td { class: "formats-cell",
                                             for file in &twf.files {
@@ -420,109 +349,5 @@ pub fn Library(
             }
         }
         } // tab-content
-    }
-}
-
-#[component]
-fn SortableHeader(
-    label: &'static str,
-    col_key: SortKey,
-    mut sort_key: Signal<SortKey>,
-    mut sort_order: Signal<SortOrder>,
-    resizable: bool,
-    #[props(default)] initial_width: Option<String>,
-) -> Element {
-    let is_active = sort_key() == col_key;
-    rsx! {
-        th {
-            class: if is_active { "sortable active" } else { "sortable" },
-            width: initial_width,
-            onclick: move |_| {
-                if sort_key() == col_key {
-                    sort_order.set(sort_order().toggle());
-                } else {
-                    sort_key.set(col_key);
-                    sort_order.set(SortOrder::Asc);
-                }
-                prefs::save_sort_prefs(sort_key(), sort_order());
-            },
-            "{label}"
-            if is_active {
-                span { class: "sort-indicator", "{sort_order().indicator()}" }
-            }
-            if resizable {
-                div {
-                    class: "col-resizer",
-                    onclick: |e: MouseEvent| e.stop_propagation(),
-                }
-            }
-        }
-    }
-}
-
-#[component]
-fn EditableCell(
-    track_id: String,
-    column: EditColumn,
-    value: String,
-    mut editing: Signal<Option<(String, EditColumn)>>,
-    mut edit_value: Signal<String>,
-    on_commit: EventHandler,
-) -> Element {
-    let col_suffix = match column {
-        EditColumn::Title => "title",
-        EditColumn::Artist => "artist",
-        EditColumn::Album => "album",
-    };
-    let input_id = format!("edit-{track_id}-{col_suffix}");
-
-    let is_editing = editing
-        .read()
-        .as_ref()
-        .is_some_and(|(id, col)| id == &track_id && *col == column);
-
-    if is_editing {
-        rsx! {
-            td { class: "editing-cell",
-                input {
-                    r#type: "text",
-                    id: "{input_id}",
-                    class: "cell-edit-input",
-                    value: "{edit_value}",
-                    autofocus: true,
-                    oninput: move |e: FormEvent| edit_value.set(e.value()),
-                    onkeydown: move |e: KeyboardEvent| {
-                        if e.key() == Key::Enter {
-                            on_commit.call(());
-                        } else if e.key() == Key::Escape {
-                            editing.set(None);
-                        }
-                    },
-                    onblur: move |_| {
-                        on_commit.call(());
-                    },
-                }
-            }
-        }
-    } else {
-        let tid = track_id.clone();
-        let val = value.clone();
-        let focus_id = input_id.clone();
-        rsx! {
-            td {
-                class: "editable-cell",
-                onclick: move |_| {
-                    editing.set(Some((tid.clone(), column)));
-                    edit_value.set(val.clone());
-
-                    let js = format!(
-                        "setTimeout(() => {{ const el = document.getElementById('{}'); if (el) {{ el.focus(); el.select?.(); }} }}, 0)",
-                        focus_id
-                    );
-                    document::eval(&js);
-                },
-                "{value}"
-            }
-        }
     }
 }

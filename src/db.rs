@@ -10,6 +10,29 @@ use rusqlite::{Connection, Row, params};
 use std::collections::HashSet;
 use std::path::Path;
 
+// ── Track ─────────────────────────────────────────────────────────────────────
+
+impl Track {
+    pub fn new(
+        id: String,
+        title: String,
+        artist: String,
+        album: String,
+        duration_secs: u16,
+        added_at: String,
+    ) -> Self {
+        Self {
+            id,
+            title,
+            artist,
+            album,
+            duration_secs,
+            tempo: 0,
+            added_at,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Track {
     pub id: String,
@@ -20,6 +43,8 @@ pub struct Track {
     pub tempo: u32,
     pub added_at: String,
 }
+
+// ── TrackFile ─────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct TrackFile {
@@ -279,6 +304,17 @@ impl Library {
         Ok(())
     }
 
+    /// Update metadata from an existing `Track` struct.
+    pub fn update_track_from(&self, track: &Track) -> rusqlite::Result<()> {
+        self.update_track(
+            &track.id,
+            &track.title,
+            &track.artist,
+            &track.album,
+            track.tempo,
+        )
+    }
+
     /// Delete a single file entry by its id.
     pub fn delete_file(&self, file_id: &str) -> rusqlite::Result<()> {
         self.conn
@@ -295,7 +331,7 @@ impl Library {
         Ok(())
     }
 
-    /// Get all file_path values in the DB (for deduplication on the remote side).
+    /// Get all `file_path` values in the DB (for deduplication on the remote side).
     pub fn used_filenames(&self) -> rusqlite::Result<HashSet<String>> {
         let mut stmt = self.conn.prepare("SELECT file_path FROM files")?;
         let mut set = HashSet::new();

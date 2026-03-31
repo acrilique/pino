@@ -27,6 +27,12 @@ impl LogEntry {
             class: "success",
         }
     }
+    pub fn warning(msg: &str) -> Self {
+        Self {
+            message: msg.to_string(),
+            class: "warning",
+        }
+    }
     pub fn error(msg: &str) -> Self {
         Self {
             message: msg.to_string(),

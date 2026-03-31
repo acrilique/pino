@@ -6,7 +6,7 @@
 //
 // SPDX-License-Identifier: MPL-2.0
 
-use super::{SyncError, file_size_on_disk, file_stem_string, new_id, read_metadata, today};
+use super::{SyncError, SyncWarnings, file_size_on_disk, file_stem_string, read_metadata};
 use crate::db::{Library, Track, TrackFile};
 use crate::format::SupportedFormat;
 use std::path::{Path, PathBuf};
@@ -45,10 +45,16 @@ fn find_audio_files(
     Ok(())
 }
 
+/// Import result including count plus any warnings.
+pub struct ImportResult {
+    pub imported: u32,
+    pub warnings: Vec<String>,
+}
+
 /// Scan a folder and import all audio files into the local database.
 ///
 /// Returns the number of newly imported tracks.
-pub fn import_folder(db_path: &Path, input_dir: &Path) -> Result<u32, SyncError> {
+pub fn import_folder(db_path: &Path, input_dir: &Path) -> Result<ImportResult, SyncError> {
     let db = Library::open(db_path)?;
 
     let all_formats = SupportedFormat::ALL.to_vec();
@@ -57,7 +63,7 @@ pub fn import_folder(db_path: &Path, input_dir: &Path) -> Result<u32, SyncError>
     audio_files.sort_by(|(a, _), (b, _)| a.cmp(b));
 
     let mut imported = 0u32;
-    let today = today();
+    let warnings = SyncWarnings::new();
 
     for (src_path, src_format) in &audio_files {
         let path_str = src_path.to_string_lossy().to_string();
@@ -77,42 +83,44 @@ pub fn import_folder(db_path: &Path, input_dir: &Path) -> Result<u32, SyncError>
                 .to_ascii_lowercase(),
         };
 
-        let meta = read_metadata(src_path, &original_stem);
+        let meta = read_metadata(src_path, &original_stem, &warnings);
 
         let file_size = file_size_on_disk(src_path);
 
-        let track_id = new_id();
-        let track = Track {
-            id: track_id.clone(),
-            title: meta.title,
-            artist: meta.artist,
-            album: meta.album,
-            duration_secs: meta.duration_secs,
-            tempo: 0,
-            added_at: today.clone(),
-        };
+        let track_id = super::new_id();
+        let track = Track::new(
+            track_id.clone(),
+            meta.title,
+            meta.artist,
+            meta.album,
+            meta.duration_secs,
+            super::today(),
+        );
 
         let file = TrackFile {
-            id: new_id(),
+            id: super::new_id(),
             track_id,
             format: format_str,
             file_path: path_str,
             file_size,
             sample_rate: meta.sample_rate,
             bitrate: meta.bitrate,
-            added_at: today.clone(),
+            added_at: super::today(),
         };
 
         if let Err(e) = db.add_track(&track) {
-            eprintln!("  Warning: failed to add track: {e}");
+            warnings.push(format!("Failed to add track: {e}"));
             continue;
         }
         if let Err(e) = db.add_file(&file) {
-            eprintln!("  Warning: failed to add file: {e}");
+            warnings.push(format!("Failed to add file: {e}"));
             continue;
         }
         imported += 1;
     }
 
-    Ok(imported)
+    Ok(ImportResult {
+        imported,
+        warnings: warnings.into_vec(),
+    })
 }
