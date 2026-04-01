@@ -67,6 +67,10 @@ jobs:
               if: runner.os != 'Windows'
               run: curl -L --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh | bash
 
+            - name: Install OpenSSL
+              if: runner.os == 'macOS'
+              run: brew install openssl@3
+
             - name: Install Dioxus CLI
               run: cargo binstall dioxus-cli --no-confirm
 
