@@ -13,6 +13,43 @@ pub enum EditColumn {
     Title,
     Artist,
     Album,
+    Genre,
+    Composer,
+    Label,
+    Remixer,
+    Key,
+    Comment,
+    Isrc,
+    Lyricist,
+    MixName,
+    ReleaseDate,
+    Bpm,
+    Year,
+    TrackNumber,
+    DiscNumber,
+    AddedAt,
+}
+
+impl EditColumn {
+    /// Returns `None` for free-text columns, or a validation function for numeric ones.
+    fn validate(self, input: &str) -> bool {
+        match self {
+            EditColumn::Bpm | EditColumn::TrackNumber => {
+                input.is_empty() || input.parse::<u32>().is_ok()
+            }
+            EditColumn::Year | EditColumn::DiscNumber => {
+                input.is_empty() || input.parse::<u16>().is_ok()
+            }
+            _ => true,
+        }
+    }
+
+    fn is_numeric(self) -> bool {
+        matches!(
+            self,
+            EditColumn::Bpm | EditColumn::Year | EditColumn::TrackNumber | EditColumn::DiscNumber
+        )
+    }
 }
 
 #[component]
@@ -33,6 +70,21 @@ pub fn EditableCell(
         EditColumn::Title => "title",
         EditColumn::Artist => "artist",
         EditColumn::Album => "album",
+        EditColumn::Genre => "genre",
+        EditColumn::Composer => "composer",
+        EditColumn::Label => "label",
+        EditColumn::Remixer => "remixer",
+        EditColumn::Key => "key",
+        EditColumn::Comment => "comment",
+        EditColumn::Isrc => "isrc",
+        EditColumn::Lyricist => "lyricist",
+        EditColumn::MixName => "mix_name",
+        EditColumn::ReleaseDate => "release_date",
+        EditColumn::Bpm => "bpm",
+        EditColumn::Year => "year",
+        EditColumn::TrackNumber => "track_number",
+        EditColumn::DiscNumber => "disc_number",
+        EditColumn::AddedAt => "added_at",
     };
     let input_id = format!("edit-{track_id}-{col_suffix}");
 
@@ -46,11 +98,17 @@ pub fn EditableCell(
             td { class: "editing-cell",
                 input {
                     r#type: "text",
+                    inputmode: if column.is_numeric() { "numeric" },
                     id: "{input_id}",
                     class: "cell-edit-input",
                     value: "{edit_value}",
                     autofocus: true,
-                    oninput: move |e: FormEvent| edit_value.set(e.value()),
+                    oninput: move |e: FormEvent| {
+                        let v = e.value();
+                        if column.validate(&v) {
+                            edit_value.set(v);
+                        }
+                    },
                     onkeydown: move |e: KeyboardEvent| {
                         if e.key() == Key::Enter {
                             on_commit.call(());

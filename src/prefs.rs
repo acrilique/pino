@@ -54,6 +54,23 @@ pub enum SortKey {
     Artist,
     Album,
     Duration,
+    Genre,
+    Composer,
+    Label,
+    Remixer,
+    Key,
+    Comment,
+    Isrc,
+    Lyricist,
+    MixName,
+    ReleaseDate,
+    Bpm,
+    Year,
+    TrackNumber,
+    DiscNumber,
+    Rating,
+    Color,
+    AddedAt,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -84,6 +101,23 @@ pub fn load_sort_prefs() -> (SortKey, SortOrder) {
         "title" => SortKey::Title,
         "album" => SortKey::Album,
         "duration" => SortKey::Duration,
+        "genre" => SortKey::Genre,
+        "composer" => SortKey::Composer,
+        "label" => SortKey::Label,
+        "remixer" => SortKey::Remixer,
+        "key" => SortKey::Key,
+        "comment" => SortKey::Comment,
+        "isrc" => SortKey::Isrc,
+        "lyricist" => SortKey::Lyricist,
+        "mix_name" => SortKey::MixName,
+        "release_date" => SortKey::ReleaseDate,
+        "bpm" => SortKey::Bpm,
+        "year" => SortKey::Year,
+        "track_number" => SortKey::TrackNumber,
+        "disc_number" => SortKey::DiscNumber,
+        "rating" => SortKey::Rating,
+        "color" => SortKey::Color,
+        "added_at" => SortKey::AddedAt,
         _ => SortKey::Artist,
     };
     let order = match prefs.sort_order.as_str() {
@@ -96,33 +130,33 @@ pub fn load_sort_prefs() -> (SortKey, SortOrder) {
 pub fn save_sort_prefs(key: SortKey, order: SortOrder) {
     let mut prefs = Prefs::load();
     prefs.sort_key = match key {
-        SortKey::Title => "title".to_string(),
-        SortKey::Artist => "artist".to_string(),
-        SortKey::Album => "album".to_string(),
-        SortKey::Duration => "duration".to_string(),
-    };
+        SortKey::Title => "title",
+        SortKey::Artist => "artist",
+        SortKey::Album => "album",
+        SortKey::Duration => "duration",
+        SortKey::Genre => "genre",
+        SortKey::Composer => "composer",
+        SortKey::Label => "label",
+        SortKey::Remixer => "remixer",
+        SortKey::Key => "key",
+        SortKey::Comment => "comment",
+        SortKey::Isrc => "isrc",
+        SortKey::Lyricist => "lyricist",
+        SortKey::MixName => "mix_name",
+        SortKey::ReleaseDate => "release_date",
+        SortKey::Bpm => "bpm",
+        SortKey::Year => "year",
+        SortKey::TrackNumber => "track_number",
+        SortKey::DiscNumber => "disc_number",
+        SortKey::Rating => "rating",
+        SortKey::Color => "color",
+        SortKey::AddedAt => "added_at",
+    }
+    .to_string();
     prefs.sort_order = match order {
         SortOrder::Asc => "asc".to_string(),
         SortOrder::Desc => "desc".to_string(),
     };
-    prefs.save();
-}
-
-// ── Column widths ─────────────────────────────────────────────────────────────
-
-pub fn load_col_widths() -> Option<Vec<f64>> {
-    let prefs = Prefs::load();
-    if prefs.col_widths.is_empty() {
-        None
-    } else {
-        Some(prefs.col_widths)
-    }
-}
-
-pub fn save_col_widths(widths: &str) {
-    let parsed: Vec<f64> = widths.split(',').filter_map(|s| s.parse().ok()).collect();
-    let mut prefs = Prefs::load();
-    prefs.col_widths = parsed;
     prefs.save();
 }
 
@@ -147,6 +181,23 @@ pub enum Column {
     Album,
     Formats,
     Duration,
+    Genre,
+    Composer,
+    Label,
+    Remixer,
+    Key,
+    Comment,
+    Isrc,
+    Lyricist,
+    MixName,
+    ReleaseDate,
+    Bpm,
+    Year,
+    TrackNumber,
+    DiscNumber,
+    Rating,
+    Color,
+    AddedAt,
 }
 
 impl Column {
@@ -156,6 +207,44 @@ impl Column {
         Column::Album,
         Column::Formats,
         Column::Duration,
+        Column::Genre,
+        Column::Composer,
+        Column::Label,
+        Column::Remixer,
+        Column::Key,
+        Column::Comment,
+        Column::Isrc,
+        Column::Lyricist,
+        Column::MixName,
+        Column::ReleaseDate,
+        Column::Bpm,
+        Column::Year,
+        Column::TrackNumber,
+        Column::DiscNumber,
+        Column::Rating,
+        Column::Color,
+        Column::AddedAt,
+    ];
+
+    /// Columns that are hidden unless the user previously toggled them.
+    const HIDDEN_BY_DEFAULT: &[Column] = &[
+        Column::Genre,
+        Column::Composer,
+        Column::Label,
+        Column::Remixer,
+        Column::Key,
+        Column::Comment,
+        Column::Isrc,
+        Column::Lyricist,
+        Column::MixName,
+        Column::ReleaseDate,
+        Column::Bpm,
+        Column::Year,
+        Column::TrackNumber,
+        Column::DiscNumber,
+        Column::Rating,
+        Column::Color,
+        Column::AddedAt,
     ];
 
     pub fn label(self) -> &'static str {
@@ -165,6 +254,23 @@ impl Column {
             Column::Album => "Album",
             Column::Formats => "Formats",
             Column::Duration => "Duration",
+            Column::Genre => "Genre",
+            Column::Composer => "Composer",
+            Column::Label => "Label",
+            Column::Remixer => "Remixer",
+            Column::Key => "Key",
+            Column::Comment => "Comment",
+            Column::Isrc => "ISRC",
+            Column::Lyricist => "Lyricist",
+            Column::MixName => "Mix Name",
+            Column::ReleaseDate => "Release Date",
+            Column::Bpm => "BPM",
+            Column::Year => "Year",
+            Column::TrackNumber => "Track #",
+            Column::DiscNumber => "Disc #",
+            Column::Rating => "Rating",
+            Column::Color => "Color",
+            Column::AddedAt => "Added At",
         }
     }
 
@@ -175,6 +281,23 @@ impl Column {
             Column::Album => "album",
             Column::Formats => "formats",
             Column::Duration => "duration",
+            Column::Genre => "genre",
+            Column::Composer => "composer",
+            Column::Label => "label",
+            Column::Remixer => "remixer",
+            Column::Key => "key",
+            Column::Comment => "comment",
+            Column::Isrc => "isrc",
+            Column::Lyricist => "lyricist",
+            Column::MixName => "mix_name",
+            Column::ReleaseDate => "release_date",
+            Column::Bpm => "bpm",
+            Column::Year => "year",
+            Column::TrackNumber => "track_number",
+            Column::DiscNumber => "disc_number",
+            Column::Rating => "rating",
+            Column::Color => "color",
+            Column::AddedAt => "added_at",
         }
     }
 
@@ -185,17 +308,40 @@ impl Column {
             "album" => Some(Column::Album),
             "formats" => Some(Column::Formats),
             "duration" => Some(Column::Duration),
+            "genre" => Some(Column::Genre),
+            "composer" => Some(Column::Composer),
+            "label" => Some(Column::Label),
+            "remixer" => Some(Column::Remixer),
+            "key" => Some(Column::Key),
+            "comment" => Some(Column::Comment),
+            "isrc" => Some(Column::Isrc),
+            "lyricist" => Some(Column::Lyricist),
+            "mix_name" => Some(Column::MixName),
+            "release_date" => Some(Column::ReleaseDate),
+            "bpm" => Some(Column::Bpm),
+            "year" => Some(Column::Year),
+            "track_number" => Some(Column::TrackNumber),
+            "disc_number" => Some(Column::DiscNumber),
+            "rating" => Some(Column::Rating),
+            "color" => Some(Column::Color),
+            "added_at" => Some(Column::AddedAt),
             _ => None,
         }
     }
 }
 
 pub fn load_hidden_columns() -> HashSet<Column> {
-    Prefs::load()
-        .hidden_columns
-        .iter()
-        .filter_map(|s| Column::from_str(s))
-        .collect()
+    let prefs = Prefs::load();
+    if prefs.hidden_columns.is_empty() {
+        // First launch / no explicit config: hide new columns by default.
+        Column::HIDDEN_BY_DEFAULT.iter().copied().collect()
+    } else {
+        prefs
+            .hidden_columns
+            .iter()
+            .filter_map(|s| Column::from_str(s))
+            .collect()
+    }
 }
 
 pub fn save_hidden_columns(hidden: &HashSet<Column>) {

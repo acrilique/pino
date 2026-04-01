@@ -6,7 +6,9 @@
 //
 // SPDX-License-Identifier: MPL-2.0
 
+mod color_cell;
 mod editable_cell;
+mod rating_cell;
 mod sortable_header;
 
 use crate::prefs::{self, Column, SortKey, SortOrder};
@@ -14,8 +16,10 @@ use crate::task::{db_op, spawn_blocking};
 use crate::{db, paths, sync};
 use dioxus::prelude::*;
 
+use color_cell::ColorCell;
 pub use editable_cell::EditColumn;
 use editable_cell::EditableCell;
+use rating_cell::RatingCell;
 use sortable_header::SortableHeader;
 
 pub fn refresh_tracks(tracks: &mut Signal<Vec<db::TrackWithFiles>>) {
@@ -33,9 +37,6 @@ fn format_duration(secs: u16) -> String {
 }
 
 const JS_TRACK_LIST_INIT: &str = include_str!("../../../assets/track-list.js");
-
-const JS_COL_WIDTH_LISTENER: &str =
-    r"window.__pino_save_widths = function(csv) { dioxus.send(csv); };";
 
 #[derive(Clone, PartialEq)]
 struct ContextMenu {
@@ -70,7 +71,6 @@ pub fn Library(
     let mut context_menu = use_signal(|| None::<ContextMenu>);
     let mut import_warnings: Signal<Vec<String>> = use_signal(Vec::new);
     let mut hidden_cols = use_signal(prefs::load_hidden_columns);
-    let col_widths = prefs::load_col_widths().unwrap_or_default();
 
     let sorted_tracks = use_memo(move || {
         let mut list = tracks();
@@ -94,6 +94,51 @@ pub fn Library(
                     .to_lowercase()
                     .cmp(&b.track.album.to_lowercase()),
                 SortKey::Duration => a.track.duration_secs.cmp(&b.track.duration_secs),
+                SortKey::Genre => a
+                    .track
+                    .genre
+                    .to_lowercase()
+                    .cmp(&b.track.genre.to_lowercase()),
+                SortKey::Composer => a
+                    .track
+                    .composer
+                    .to_lowercase()
+                    .cmp(&b.track.composer.to_lowercase()),
+                SortKey::Label => a
+                    .track
+                    .label
+                    .to_lowercase()
+                    .cmp(&b.track.label.to_lowercase()),
+                SortKey::Remixer => a
+                    .track
+                    .remixer
+                    .to_lowercase()
+                    .cmp(&b.track.remixer.to_lowercase()),
+                SortKey::Key => a.track.key.to_lowercase().cmp(&b.track.key.to_lowercase()),
+                SortKey::Comment => a
+                    .track
+                    .comment
+                    .to_lowercase()
+                    .cmp(&b.track.comment.to_lowercase()),
+                SortKey::Isrc => a.track.isrc.cmp(&b.track.isrc),
+                SortKey::Lyricist => a
+                    .track
+                    .lyricist
+                    .to_lowercase()
+                    .cmp(&b.track.lyricist.to_lowercase()),
+                SortKey::MixName => a
+                    .track
+                    .mix_name
+                    .to_lowercase()
+                    .cmp(&b.track.mix_name.to_lowercase()),
+                SortKey::ReleaseDate => a.track.release_date.cmp(&b.track.release_date),
+                SortKey::Bpm => a.track.tempo.cmp(&b.track.tempo),
+                SortKey::Year => a.track.year.cmp(&b.track.year),
+                SortKey::TrackNumber => a.track.track_number.cmp(&b.track.track_number),
+                SortKey::DiscNumber => a.track.disc_number.cmp(&b.track.disc_number),
+                SortKey::Rating => a.track.rating.cmp(&b.track.rating),
+                SortKey::Color => a.track.color.cmp(&b.track.color),
+                SortKey::AddedAt => a.track.added_at.cmp(&b.track.added_at),
             };
             match order {
                 SortOrder::Asc => cmp,
@@ -116,6 +161,29 @@ pub fn Library(
                 EditColumn::Title => twf.track.title.clone_from(&new_val),
                 EditColumn::Artist => twf.track.artist.clone_from(&new_val),
                 EditColumn::Album => twf.track.album.clone_from(&new_val),
+                EditColumn::Genre => twf.track.genre.clone_from(&new_val),
+                EditColumn::Composer => twf.track.composer.clone_from(&new_val),
+                EditColumn::Label => twf.track.label.clone_from(&new_val),
+                EditColumn::Remixer => twf.track.remixer.clone_from(&new_val),
+                EditColumn::Key => twf.track.key.clone_from(&new_val),
+                EditColumn::Comment => twf.track.comment.clone_from(&new_val),
+                EditColumn::Isrc => twf.track.isrc.clone_from(&new_val),
+                EditColumn::Lyricist => twf.track.lyricist.clone_from(&new_val),
+                EditColumn::MixName => twf.track.mix_name.clone_from(&new_val),
+                EditColumn::ReleaseDate => twf.track.release_date.clone_from(&new_val),
+                EditColumn::Bpm => {
+                    twf.track.tempo = new_val.parse().unwrap_or(twf.track.tempo);
+                }
+                EditColumn::Year => {
+                    twf.track.year = new_val.parse().unwrap_or(twf.track.year);
+                }
+                EditColumn::TrackNumber => {
+                    twf.track.track_number = new_val.parse().unwrap_or(twf.track.track_number);
+                }
+                EditColumn::DiscNumber => {
+                    twf.track.disc_number = new_val.parse().unwrap_or(twf.track.disc_number);
+                }
+                EditColumn::AddedAt => twf.track.added_at.clone_from(&new_val),
             }
             let track = twf.track.clone();
             drop(w);
@@ -131,6 +199,30 @@ pub fn Library(
             document::eval(&js);
         }
         editing.set(None);
+    };
+
+    let mut update_rating = move |track_id: String, new_val: u8| {
+        let mut w = tracks.write();
+        if let Some(twf) = w.iter_mut().find(|t| t.track.id == track_id) {
+            twf.track.rating = new_val;
+            let track = twf.track.clone();
+            drop(w);
+            spawn(async move {
+                let _ = db_op(move |lib| lib.update_track_from(&track)).await;
+            });
+        }
+    };
+
+    let mut update_color = move |track_id: String, new_val: u8| {
+        let mut w = tracks.write();
+        if let Some(twf) = w.iter_mut().find(|t| t.track.id == track_id) {
+            twf.track.color = new_val;
+            let track = twf.track.clone();
+            drop(w);
+            spawn(async move {
+                let _ = db_op(move |lib| lib.update_track_from(&track)).await;
+            });
+        }
     };
 
     rsx! {
@@ -281,13 +373,6 @@ pub fn Library(
                 id: "track-list",
                 onmounted: |_| {
                     document::eval(JS_TRACK_LIST_INIT);
-
-                    let mut col_eval = document::eval(JS_COL_WIDTH_LISTENER);
-                    spawn(async move {
-                        while let Ok(widths) = col_eval.recv::<String>().await {
-                            prefs::save_col_widths(&widths);
-                        }
-                    });
                 },
                 table {
                     thead {
@@ -301,17 +386,16 @@ pub fn Library(
                                 }));
                             },
                             if !hidden_cols.read().contains(&Column::Title) {
-                                SortableHeader { label: "Title", col_key: SortKey::Title, sort_key, sort_order, resizable: true, initial_width: col_widths.first().map(|w| format!("{w}%")) }
+                                SortableHeader { label: "Title", col_key: SortKey::Title, sort_key, sort_order, resizable: true }
                             }
                             if !hidden_cols.read().contains(&Column::Artist) {
-                                SortableHeader { label: "Artist", col_key: SortKey::Artist, sort_key, sort_order, resizable: true, initial_width: col_widths.get(1).map(|w| format!("{w}%")) }
+                                SortableHeader { label: "Artist", col_key: SortKey::Artist, sort_key, sort_order, resizable: true }
                             }
                             if !hidden_cols.read().contains(&Column::Album) {
-                                SortableHeader { label: "Album", col_key: SortKey::Album, sort_key, sort_order, resizable: true, initial_width: col_widths.get(2).map(|w| format!("{w}%")) }
+                                SortableHeader { label: "Album", col_key: SortKey::Album, sort_key, sort_order, resizable: true }
                             }
                             if !hidden_cols.read().contains(&Column::Formats) {
                                 th {
-                                    width: col_widths.get(3).map(|w| format!("{w}%")),
                                     "Formats"
                                     div {
                                         class: "col-resizer",
@@ -320,7 +404,58 @@ pub fn Library(
                                 }
                             }
                             if !hidden_cols.read().contains(&Column::Duration) {
-                                SortableHeader { label: "Duration", col_key: SortKey::Duration, sort_key, sort_order, resizable: false, initial_width: col_widths.get(4).map(|w| format!("{w}%")) }
+                                SortableHeader { label: "Duration", col_key: SortKey::Duration, sort_key, sort_order, resizable: true }
+                            }
+                            if !hidden_cols.read().contains(&Column::Genre) {
+                                SortableHeader { label: "Genre", col_key: SortKey::Genre, sort_key, sort_order, resizable: true }
+                            }
+                            if !hidden_cols.read().contains(&Column::Composer) {
+                                SortableHeader { label: "Composer", col_key: SortKey::Composer, sort_key, sort_order, resizable: true }
+                            }
+                            if !hidden_cols.read().contains(&Column::Label) {
+                                SortableHeader { label: "Label", col_key: SortKey::Label, sort_key, sort_order, resizable: true }
+                            }
+                            if !hidden_cols.read().contains(&Column::Remixer) {
+                                SortableHeader { label: "Remixer", col_key: SortKey::Remixer, sort_key, sort_order, resizable: true }
+                            }
+                            if !hidden_cols.read().contains(&Column::Key) {
+                                SortableHeader { label: "Key", col_key: SortKey::Key, sort_key, sort_order, resizable: true }
+                            }
+                            if !hidden_cols.read().contains(&Column::Comment) {
+                                SortableHeader { label: "Comment", col_key: SortKey::Comment, sort_key, sort_order, resizable: true }
+                            }
+                            if !hidden_cols.read().contains(&Column::Isrc) {
+                                SortableHeader { label: "ISRC", col_key: SortKey::Isrc, sort_key, sort_order, resizable: true }
+                            }
+                            if !hidden_cols.read().contains(&Column::Lyricist) {
+                                SortableHeader { label: "Lyricist", col_key: SortKey::Lyricist, sort_key, sort_order, resizable: true }
+                            }
+                            if !hidden_cols.read().contains(&Column::MixName) {
+                                SortableHeader { label: "Mix Name", col_key: SortKey::MixName, sort_key, sort_order, resizable: true }
+                            }
+                            if !hidden_cols.read().contains(&Column::ReleaseDate) {
+                                SortableHeader { label: "Release Date", col_key: SortKey::ReleaseDate, sort_key, sort_order, resizable: true }
+                            }
+                            if !hidden_cols.read().contains(&Column::Bpm) {
+                                SortableHeader { label: "BPM", col_key: SortKey::Bpm, sort_key, sort_order, resizable: true }
+                            }
+                            if !hidden_cols.read().contains(&Column::Year) {
+                                SortableHeader { label: "Year", col_key: SortKey::Year, sort_key, sort_order, resizable: true }
+                            }
+                            if !hidden_cols.read().contains(&Column::TrackNumber) {
+                                SortableHeader { label: "Track #", col_key: SortKey::TrackNumber, sort_key, sort_order, resizable: true }
+                            }
+                            if !hidden_cols.read().contains(&Column::DiscNumber) {
+                                SortableHeader { label: "Disc #", col_key: SortKey::DiscNumber, sort_key, sort_order, resizable: true }
+                            }
+                            if !hidden_cols.read().contains(&Column::Rating) {
+                                SortableHeader { label: "Rating", col_key: SortKey::Rating, sort_key, sort_order, resizable: true }
+                            }
+                            if !hidden_cols.read().contains(&Column::Color) {
+                                SortableHeader { label: "Color", col_key: SortKey::Color, sort_key, sort_order, resizable: true }
+                            }
+                            if !hidden_cols.read().contains(&Column::AddedAt) {
+                                SortableHeader { label: "Added At", col_key: SortKey::AddedAt, sort_key, sort_order, resizable: true }
                             }
                         }
                     }
@@ -402,6 +537,159 @@ pub fn Library(
                                         }
                                         if !hidden_cols.read().contains(&Column::Duration) {
                                             td { "{format_duration(twf.track.duration_secs)}" }
+                                        }
+                                        EditableCell {
+                                            track_id: track_id.clone(),
+                                            column: EditColumn::Genre,
+                                            value: twf.track.genre.clone(),
+                                            editing,
+                                            edit_value,
+                                            on_commit: move |()| commit_edit(),
+                                            hidden: hidden_cols.read().contains(&Column::Genre),
+                                        }
+                                        EditableCell {
+                                            track_id: track_id.clone(),
+                                            column: EditColumn::Composer,
+                                            value: twf.track.composer.clone(),
+                                            editing,
+                                            edit_value,
+                                            on_commit: move |()| commit_edit(),
+                                            hidden: hidden_cols.read().contains(&Column::Composer),
+                                        }
+                                        EditableCell {
+                                            track_id: track_id.clone(),
+                                            column: EditColumn::Label,
+                                            value: twf.track.label.clone(),
+                                            editing,
+                                            edit_value,
+                                            on_commit: move |()| commit_edit(),
+                                            hidden: hidden_cols.read().contains(&Column::Label),
+                                        }
+                                        EditableCell {
+                                            track_id: track_id.clone(),
+                                            column: EditColumn::Remixer,
+                                            value: twf.track.remixer.clone(),
+                                            editing,
+                                            edit_value,
+                                            on_commit: move |()| commit_edit(),
+                                            hidden: hidden_cols.read().contains(&Column::Remixer),
+                                        }
+                                        EditableCell {
+                                            track_id: track_id.clone(),
+                                            column: EditColumn::Key,
+                                            value: twf.track.key.clone(),
+                                            editing,
+                                            edit_value,
+                                            on_commit: move |()| commit_edit(),
+                                            hidden: hidden_cols.read().contains(&Column::Key),
+                                        }
+                                        EditableCell {
+                                            track_id: track_id.clone(),
+                                            column: EditColumn::Comment,
+                                            value: twf.track.comment.clone(),
+                                            editing,
+                                            edit_value,
+                                            on_commit: move |()| commit_edit(),
+                                            hidden: hidden_cols.read().contains(&Column::Comment),
+                                        }
+                                        EditableCell {
+                                            track_id: track_id.clone(),
+                                            column: EditColumn::Isrc,
+                                            value: twf.track.isrc.clone(),
+                                            editing,
+                                            edit_value,
+                                            on_commit: move |()| commit_edit(),
+                                            hidden: hidden_cols.read().contains(&Column::Isrc),
+                                        }
+                                        EditableCell {
+                                            track_id: track_id.clone(),
+                                            column: EditColumn::Lyricist,
+                                            value: twf.track.lyricist.clone(),
+                                            editing,
+                                            edit_value,
+                                            on_commit: move |()| commit_edit(),
+                                            hidden: hidden_cols.read().contains(&Column::Lyricist),
+                                        }
+                                        EditableCell {
+                                            track_id: track_id.clone(),
+                                            column: EditColumn::MixName,
+                                            value: twf.track.mix_name.clone(),
+                                            editing,
+                                            edit_value,
+                                            on_commit: move |()| commit_edit(),
+                                            hidden: hidden_cols.read().contains(&Column::MixName),
+                                        }
+                                        EditableCell {
+                                            track_id: track_id.clone(),
+                                            column: EditColumn::ReleaseDate,
+                                            value: twf.track.release_date.clone(),
+                                            editing,
+                                            edit_value,
+                                            on_commit: move |()| commit_edit(),
+                                            hidden: hidden_cols.read().contains(&Column::ReleaseDate),
+                                        }
+                                        EditableCell {
+                                            track_id: track_id.clone(),
+                                            column: EditColumn::Bpm,
+                                            value: if twf.track.tempo == 0 { String::new() } else { twf.track.tempo.to_string() },
+                                            editing,
+                                            edit_value,
+                                            on_commit: move |()| commit_edit(),
+                                            hidden: hidden_cols.read().contains(&Column::Bpm),
+                                        }
+                                        EditableCell {
+                                            track_id: track_id.clone(),
+                                            column: EditColumn::Year,
+                                            value: if twf.track.year == 0 { String::new() } else { twf.track.year.to_string() },
+                                            editing,
+                                            edit_value,
+                                            on_commit: move |()| commit_edit(),
+                                            hidden: hidden_cols.read().contains(&Column::Year),
+                                        }
+                                        EditableCell {
+                                            track_id: track_id.clone(),
+                                            column: EditColumn::TrackNumber,
+                                            value: if twf.track.track_number == 0 { String::new() } else { twf.track.track_number.to_string() },
+                                            editing,
+                                            edit_value,
+                                            on_commit: move |()| commit_edit(),
+                                            hidden: hidden_cols.read().contains(&Column::TrackNumber),
+                                        }
+                                        EditableCell {
+                                            track_id: track_id.clone(),
+                                            column: EditColumn::DiscNumber,
+                                            value: if twf.track.disc_number == 0 { String::new() } else { twf.track.disc_number.to_string() },
+                                            editing,
+                                            edit_value,
+                                            on_commit: move |()| commit_edit(),
+                                            hidden: hidden_cols.read().contains(&Column::DiscNumber),
+                                        }
+                                        RatingCell {
+                                            track_id: track_id.clone(),
+                                            value: twf.track.rating,
+                                            on_change: {
+                                                let tid = track_id.clone();
+                                                move |v: u8| update_rating(tid.clone(), v)
+                                            },
+                                            hidden: hidden_cols.read().contains(&Column::Rating),
+                                        }
+                                        ColorCell {
+                                            track_id: track_id.clone(),
+                                            value: twf.track.color,
+                                            on_change: {
+                                                let tid = track_id.clone();
+                                                move |v: u8| update_color(tid.clone(), v)
+                                            },
+                                            hidden: hidden_cols.read().contains(&Column::Color),
+                                        }
+                                        EditableCell {
+                                            track_id: track_id.clone(),
+                                            column: EditColumn::AddedAt,
+                                            value: twf.track.added_at.clone(),
+                                            editing,
+                                            edit_value,
+                                            on_commit: move |()| commit_edit(),
+                                            hidden: hidden_cols.read().contains(&Column::AddedAt),
                                         }
                                     }
                                 }

@@ -16,13 +16,11 @@ pub fn SortableHeader(
     mut sort_key: Signal<SortKey>,
     mut sort_order: Signal<SortOrder>,
     resizable: bool,
-    #[props(default)] initial_width: Option<String>,
 ) -> Element {
     let is_active = sort_key() == col_key;
     rsx! {
         th {
             class: if is_active { "sortable active" } else { "sortable" },
-            width: initial_width,
             onclick: move |_| {
                 if sort_key() == col_key {
                     sort_order.set(sort_order().toggle());
