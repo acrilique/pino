@@ -180,7 +180,22 @@ fn update_remote_metadata(
             && (local.title != remote.title
                 || local.artist != remote.artist
                 || local.album != remote.album
-                || local.tempo != remote.tempo)
+                || local.genre != remote.genre
+                || local.composer != remote.composer
+                || local.label != remote.label
+                || local.remixer != remote.remixer
+                || local.key != remote.key
+                || local.comment != remote.comment
+                || local.isrc != remote.isrc
+                || local.lyricist != remote.lyricist
+                || local.mix_name != remote.mix_name
+                || local.release_date != remote.release_date
+                || local.tempo != remote.tempo
+                || local.year != remote.year
+                || local.track_number != remote.track_number
+                || local.disc_number != remote.disc_number
+                || local.rating != remote.rating
+                || local.color != remote.color)
         {
             remote_db.update_track_from(local).ok();
             updated += 1;
@@ -428,8 +443,23 @@ fn copy_to_destination(
             title: item.track.title.clone(),
             artist: item.track.artist.clone(),
             album: item.track.album.clone(),
+            genre: item.track.genre.clone(),
+            composer: item.track.composer.clone(),
+            label: item.track.label.clone(),
+            remixer: item.track.remixer.clone(),
+            key: item.track.key.clone(),
+            comment: item.track.comment.clone(),
+            isrc: item.track.isrc.clone(),
+            lyricist: item.track.lyricist.clone(),
+            mix_name: item.track.mix_name.clone(),
+            release_date: item.track.release_date.clone(),
             duration_secs: item.track.duration_secs,
             tempo: item.track.tempo,
+            year: item.track.year,
+            track_number: item.track.track_number,
+            disc_number: item.track.disc_number,
+            rating: item.track.rating,
+            color: item.track.color,
             added_at: today(),
         };
 

@@ -10,14 +10,31 @@ use rusqlite::{Connection, Row, params};
 use std::collections::HashSet;
 use std::path::Path;
 
+// track_number starts with track, so clippy complains
 #[derive(Debug, Clone, PartialEq)]
+#[allow(clippy::struct_field_names)]
 pub struct Track {
     pub id: String,
     pub title: String,
     pub artist: String,
     pub album: String,
+    pub genre: String,
+    pub composer: String,
+    pub label: String,
+    pub remixer: String,
+    pub key: String,
+    pub comment: String,
+    pub isrc: String,
+    pub lyricist: String,
+    pub mix_name: String,
+    pub release_date: String,
     pub duration_secs: u16,
     pub tempo: u32,
+    pub year: u16,
+    pub track_number: u32,
+    pub disc_number: u16,
+    pub rating: u8,
+    pub color: u8,
     pub added_at: String,
 }
 
@@ -39,9 +56,24 @@ fn track_from_row(row: &Row) -> rusqlite::Result<Track> {
         title: row.get(1)?,
         artist: row.get(2)?,
         album: row.get(3)?,
-        duration_secs: row.get(4)?,
-        tempo: row.get(5)?,
-        added_at: row.get(6)?,
+        genre: row.get(4)?,
+        composer: row.get(5)?,
+        label: row.get(6)?,
+        remixer: row.get(7)?,
+        key: row.get(8)?,
+        comment: row.get(9)?,
+        isrc: row.get(10)?,
+        lyricist: row.get(11)?,
+        mix_name: row.get(12)?,
+        release_date: row.get(13)?,
+        duration_secs: row.get(14)?,
+        tempo: row.get(15)?,
+        year: row.get(16)?,
+        track_number: row.get(17)?,
+        disc_number: row.get(18)?,
+        rating: row.get(19)?,
+        color: row.get(20)?,
+        added_at: row.get(21)?,
     })
 }
 
@@ -80,6 +112,8 @@ impl Library {
         Ok(lib)
     }
 
+    // There's a bunch of SQL statements here so it makes sense to allow the long function
+    #[allow(clippy::too_many_lines)]
     fn migrate(&self) -> rusqlite::Result<()> {
         let has_files_table: bool = self.conn.query_row(
             "SELECT count(*) > 0 FROM sqlite_master WHERE type='table' AND name='files'",
@@ -88,6 +122,7 @@ impl Library {
         )?;
 
         if has_files_table {
+            self.migrate_extended_metadata()?;
             return Ok(());
         }
 
@@ -135,8 +170,23 @@ impl Library {
                     title TEXT NOT NULL DEFAULT '',
                     artist TEXT NOT NULL DEFAULT '',
                     album TEXT NOT NULL DEFAULT '',
+                    genre TEXT NOT NULL DEFAULT '',
+                    composer TEXT NOT NULL DEFAULT '',
+                    label TEXT NOT NULL DEFAULT '',
+                    remixer TEXT NOT NULL DEFAULT '',
+                    key TEXT NOT NULL DEFAULT '',
+                    comment TEXT NOT NULL DEFAULT '',
+                    isrc TEXT NOT NULL DEFAULT '',
+                    lyricist TEXT NOT NULL DEFAULT '',
+                    mix_name TEXT NOT NULL DEFAULT '',
+                    release_date TEXT NOT NULL DEFAULT '',
                     duration_secs INTEGER NOT NULL DEFAULT 0,
                     tempo INTEGER NOT NULL DEFAULT 0,
+                    year INTEGER NOT NULL DEFAULT 0,
+                    track_number INTEGER NOT NULL DEFAULT 0,
+                    disc_number INTEGER NOT NULL DEFAULT 0,
+                    rating INTEGER NOT NULL DEFAULT 0,
+                    color INTEGER NOT NULL DEFAULT 0,
                     added_at TEXT NOT NULL
                 );
 
@@ -166,8 +216,23 @@ impl Library {
                     title TEXT NOT NULL DEFAULT '',
                     artist TEXT NOT NULL DEFAULT '',
                     album TEXT NOT NULL DEFAULT '',
+                    genre TEXT NOT NULL DEFAULT '',
+                    composer TEXT NOT NULL DEFAULT '',
+                    label TEXT NOT NULL DEFAULT '',
+                    remixer TEXT NOT NULL DEFAULT '',
+                    key TEXT NOT NULL DEFAULT '',
+                    comment TEXT NOT NULL DEFAULT '',
+                    isrc TEXT NOT NULL DEFAULT '',
+                    lyricist TEXT NOT NULL DEFAULT '',
+                    mix_name TEXT NOT NULL DEFAULT '',
+                    release_date TEXT NOT NULL DEFAULT '',
                     duration_secs INTEGER NOT NULL DEFAULT 0,
                     tempo INTEGER NOT NULL DEFAULT 0,
+                    year INTEGER NOT NULL DEFAULT 0,
+                    track_number INTEGER NOT NULL DEFAULT 0,
+                    disc_number INTEGER NOT NULL DEFAULT 0,
+                    rating INTEGER NOT NULL DEFAULT 0,
+                    color INTEGER NOT NULL DEFAULT 0,
                     added_at TEXT NOT NULL
                 );
 
@@ -187,17 +252,71 @@ impl Library {
         Ok(())
     }
 
+    /// Add the extended metadata columns if they don't exist yet (v2 → v3 migration).
+    fn migrate_extended_metadata(&self) -> rusqlite::Result<()> {
+        let has_genre: bool = self.conn.query_row(
+            "SELECT count(*) > 0 FROM pragma_table_info('tracks') WHERE name='genre'",
+            [],
+            |row| row.get(0),
+        )?;
+        if has_genre {
+            return Ok(());
+        }
+        self.conn.execute_batch(
+            "ALTER TABLE tracks ADD COLUMN genre TEXT NOT NULL DEFAULT '';
+             ALTER TABLE tracks ADD COLUMN composer TEXT NOT NULL DEFAULT '';
+             ALTER TABLE tracks ADD COLUMN label TEXT NOT NULL DEFAULT '';
+             ALTER TABLE tracks ADD COLUMN remixer TEXT NOT NULL DEFAULT '';
+             ALTER TABLE tracks ADD COLUMN key TEXT NOT NULL DEFAULT '';
+             ALTER TABLE tracks ADD COLUMN comment TEXT NOT NULL DEFAULT '';
+             ALTER TABLE tracks ADD COLUMN isrc TEXT NOT NULL DEFAULT '';
+             ALTER TABLE tracks ADD COLUMN lyricist TEXT NOT NULL DEFAULT '';
+             ALTER TABLE tracks ADD COLUMN mix_name TEXT NOT NULL DEFAULT '';
+             ALTER TABLE tracks ADD COLUMN release_date TEXT NOT NULL DEFAULT '';
+             ALTER TABLE tracks ADD COLUMN year INTEGER NOT NULL DEFAULT 0;
+             ALTER TABLE tracks ADD COLUMN track_number INTEGER NOT NULL DEFAULT 0;
+             ALTER TABLE tracks ADD COLUMN disc_number INTEGER NOT NULL DEFAULT 0;
+             ALTER TABLE tracks ADD COLUMN rating INTEGER NOT NULL DEFAULT 0;
+             ALTER TABLE tracks ADD COLUMN color INTEGER NOT NULL DEFAULT 0;",
+        )?;
+        Ok(())
+    }
+
     pub fn add_track(&self, track: &Track) -> rusqlite::Result<()> {
         self.conn.execute(
-            "INSERT OR IGNORE INTO tracks (id, title, artist, album, duration_secs, tempo, added_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            "INSERT OR IGNORE INTO tracks (
+                id, title, artist, album, genre, composer, label, remixer,
+                key, comment, isrc, lyricist, mix_name, release_date,
+                duration_secs, tempo, year, track_number, disc_number,
+                rating, color, added_at
+             ) VALUES (
+                ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8,
+                ?9, ?10, ?11, ?12, ?13, ?14,
+                ?15, ?16, ?17, ?18, ?19,
+                ?20, ?21, ?22
+             )",
             params![
                 track.id,
                 track.title,
                 track.artist,
                 track.album,
+                track.genre,
+                track.composer,
+                track.label,
+                track.remixer,
+                track.key,
+                track.comment,
+                track.isrc,
+                track.lyricist,
+                track.mix_name,
+                track.release_date,
                 track.duration_secs,
                 track.tempo,
+                track.year,
+                track.track_number,
+                track.disc_number,
+                track.rating,
+                track.color,
                 track.added_at,
             ],
         )?;
@@ -224,7 +343,10 @@ impl Library {
 
     pub fn get_all_tracks_with_files(&self) -> rusqlite::Result<Vec<TrackWithFiles>> {
         let mut track_stmt = self.conn.prepare(
-            "SELECT id, title, artist, album, duration_secs, tempo, added_at
+            "SELECT id, title, artist, album, genre, composer, label, remixer,
+                    key, comment, isrc, lyricist, mix_name, release_date,
+                    duration_secs, tempo, year, track_number, disc_number,
+                    rating, color, added_at
              FROM tracks ORDER BY artist, album, title",
         )?;
         let tracks: Vec<Track> = track_stmt
@@ -263,31 +385,42 @@ impl Library {
         Ok(count > 0)
     }
 
-    /// Update the metadata fields (title, artist, album, tempo) for a track.
-    pub fn update_track(
-        &self,
-        id: &str,
-        title: &str,
-        artist: &str,
-        album: &str,
-        tempo: u32,
-    ) -> rusqlite::Result<()> {
+    /// Update all metadata fields for a track.
+    pub fn update_track_from(&self, track: &Track) -> rusqlite::Result<()> {
         self.conn.execute(
-            "UPDATE tracks SET title = ?1, artist = ?2, album = ?3, tempo = ?4 WHERE id = ?5",
-            params![title, artist, album, tempo, id],
+            "UPDATE tracks SET
+                title = ?1, artist = ?2, album = ?3, genre = ?4,
+                composer = ?5, label = ?6, remixer = ?7, key = ?8,
+                comment = ?9, isrc = ?10, lyricist = ?11, mix_name = ?12,
+                release_date = ?13, duration_secs = ?14, tempo = ?15,
+                year = ?16, track_number = ?17, disc_number = ?18,
+                rating = ?19, color = ?20
+             WHERE id = ?21",
+            params![
+                track.title,
+                track.artist,
+                track.album,
+                track.genre,
+                track.composer,
+                track.label,
+                track.remixer,
+                track.key,
+                track.comment,
+                track.isrc,
+                track.lyricist,
+                track.mix_name,
+                track.release_date,
+                track.duration_secs,
+                track.tempo,
+                track.year,
+                track.track_number,
+                track.disc_number,
+                track.rating,
+                track.color,
+                track.id,
+            ],
         )?;
         Ok(())
-    }
-
-    /// Update metadata from an existing `Track` struct.
-    pub fn update_track_from(&self, track: &Track) -> rusqlite::Result<()> {
-        self.update_track(
-            &track.id,
-            &track.title,
-            &track.artist,
-            &track.album,
-            track.tempo,
-        )
     }
 
     /// Delete a single file entry by its id.
