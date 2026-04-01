@@ -12,14 +12,27 @@ use crate::format::SupportedFormat;
 use rekordcrate::pdb::io::Database;
 use rekordcrate::pdb::string::DeviceSQLString;
 use rekordcrate::pdb::{
-    Album, Artist, DatabaseType, History, PageType, PlainPageType, PlainRow, Row, Subtype,
+    Album, Artist, DatabaseType, Genre, History, Key, Label, PageType, PlainPageType, PlainRow,
+    Row, Subtype,
 };
+use rekordcrate::util::ColorIndex;
 use std::collections::HashMap;
 use std::fs::File;
 use std::path::Path;
 
 type ArtistMap = HashMap<String, u32>;
 type AlbumMap = HashMap<(String, u32), u32>;
+type GenreMap = HashMap<String, u32>;
+type KeyMap = HashMap<String, u32>;
+type LabelMap = HashMap<String, u32>;
+
+struct IdMaps {
+    artists: ArtistMap,
+    albums: AlbumMap,
+    genres: GenreMap,
+    keys: KeyMap,
+    labels: LabelMap,
+}
 
 /// Generate a Pioneer PDB database from all tracks in the given library.
 pub(super) fn generate_pdb(db: &Library, dest_dir: &Path) -> Result<(), SyncError> {
@@ -32,13 +45,17 @@ pub(super) fn generate_pdb(db: &Library, dest_dir: &Path) -> Result<(), SyncErro
     let rekordbox_dir = dest_dir.join("PIONEER").join("rekordbox");
     std::fs::create_dir_all(&rekordbox_dir)?;
 
-    let (artist_map, album_map) = build_id_maps(&all);
+    let maps = build_id_maps(&all);
 
     let mut pdb = create_pdb(&rekordbox_dir)?;
 
     let today = today();
-    let exported_count = insert_tracks(&mut pdb, &all, &artist_map, &album_map, &today)?;
-    insert_artists_and_albums(&mut pdb, &artist_map, &album_map)?;
+    let exported_count = insert_tracks(&mut pdb, &all, &maps, &today)?;
+    insert_artists(&mut pdb, &maps.artists)?;
+    insert_albums(&mut pdb, &maps.albums)?;
+    insert_genres(&mut pdb, &maps.genres)?;
+    insert_keys(&mut pdb, &maps.keys)?;
+    insert_labels(&mut pdb, &maps.labels)?;
 
     rekordcrate::pdb::defaults::insert_default_colors(&mut pdb)?;
     rekordcrate::pdb::defaults::insert_default_columns(&mut pdb)?;
@@ -56,28 +73,55 @@ pub(super) fn generate_pdb(db: &Library, dest_dir: &Path) -> Result<(), SyncErro
     pdb.close()?;
 
     println!(
-        "PDB: {} track(s), {} artist(s), {} album(s)",
+        "PDB: {} track(s), {} artist(s), {} album(s), {} genre(s), {} key(s), {} label(s)",
         exported_count,
-        artist_map.len(),
-        album_map.len(),
+        maps.artists.len(),
+        maps.albums.len(),
+        maps.genres.len(),
+        maps.keys.len(),
+        maps.labels.len(),
     );
 
     Ok(())
 }
 
-/// Build sequential ID maps for artists and albums from the track list.
-fn build_id_maps(all: &[TrackWithFiles]) -> (ArtistMap, AlbumMap) {
+/// Build sequential ID maps for artists, albums, genres, keys, and labels from the track list.
+///
+/// Composers and remixers are inserted into the artist map (they get their own artist IDs).
+fn build_id_maps(all: &[TrackWithFiles]) -> IdMaps {
     let mut artist_map: ArtistMap = HashMap::new();
     let mut next_artist_id: u32 = 1;
     let mut album_map: AlbumMap = HashMap::new();
     let mut next_album_id: u32 = 1;
+    let mut genre_map: GenreMap = HashMap::new();
+    let mut next_genre_id: u32 = 1;
+    let mut key_map: KeyMap = HashMap::new();
+    let mut next_key_id: u32 = 1;
+    let mut label_map: LabelMap = HashMap::new();
+    let mut next_label_id: u32 = 1;
 
     for twf in all {
         let track = &twf.track;
+
+        // Artist
         if !track.artist.is_empty() && !artist_map.contains_key(&track.artist) {
             artist_map.insert(track.artist.clone(), next_artist_id);
             next_artist_id += 1;
         }
+
+        // Composer (stored in the Artist table with its own ID)
+        if !track.composer.is_empty() && !artist_map.contains_key(&track.composer) {
+            artist_map.insert(track.composer.clone(), next_artist_id);
+            next_artist_id += 1;
+        }
+
+        // Remixer (stored in the Artist table with its own ID)
+        if !track.remixer.is_empty() && !artist_map.contains_key(&track.remixer) {
+            artist_map.insert(track.remixer.clone(), next_artist_id);
+            next_artist_id += 1;
+        }
+
+        // Album
         if !track.album.is_empty() {
             let artist_id = if track.artist.is_empty() {
                 0
@@ -90,9 +134,33 @@ fn build_id_maps(all: &[TrackWithFiles]) -> (ArtistMap, AlbumMap) {
                 next_album_id += 1;
             }
         }
+
+        // Genre
+        if !track.genre.is_empty() && !genre_map.contains_key(&track.genre) {
+            genre_map.insert(track.genre.clone(), next_genre_id);
+            next_genre_id += 1;
+        }
+
+        // Key
+        if !track.key.is_empty() && !key_map.contains_key(&track.key) {
+            key_map.insert(track.key.clone(), next_key_id);
+            next_key_id += 1;
+        }
+
+        // Label
+        if !track.label.is_empty() && !label_map.contains_key(&track.label) {
+            label_map.insert(track.label.clone(), next_label_id);
+            next_label_id += 1;
+        }
     }
 
-    (artist_map, album_map)
+    IdMaps {
+        artists: artist_map,
+        albums: album_map,
+        genres: genre_map,
+        keys: key_map,
+        labels: label_map,
+    }
 }
 
 /// Create the PDB file with the standard rekordbox table layout.
@@ -133,8 +201,7 @@ fn create_pdb(rekordbox_dir: &Path) -> Result<Database<File>, SyncError> {
 fn insert_tracks(
     pdb: &mut Database<File>,
     all: &[TrackWithFiles],
-    artist_map: &ArtistMap,
-    album_map: &AlbumMap,
+    maps: &IdMaps,
     today: &str,
 ) -> Result<u32, SyncError> {
     let mut exported_count: u32 = 0;
@@ -149,12 +216,37 @@ fn insert_tracks(
         let artist_id = if track.artist.is_empty() {
             0
         } else {
-            artist_map[&track.artist]
+            maps.artists[&track.artist]
         };
         let album_id = if track.album.is_empty() {
             0
         } else {
-            album_map[&(track.album.clone(), artist_id)]
+            maps.albums[&(track.album.clone(), artist_id)]
+        };
+        let genre_id = if track.genre.is_empty() {
+            0
+        } else {
+            maps.genres[&track.genre]
+        };
+        let key_id = if track.key.is_empty() {
+            0
+        } else {
+            maps.keys[&track.key]
+        };
+        let label_id = if track.label.is_empty() {
+            0
+        } else {
+            maps.labels[&track.label]
+        };
+        let composer_id = if track.composer.is_empty() {
+            0
+        } else {
+            maps.artists[&track.composer]
+        };
+        let remixer_id = if track.remixer.is_empty() {
+            0
+        } else {
+            maps.artists[&track.remixer]
         };
 
         let pioneer_path = format!("/Contents/{}", file.file_path);
@@ -172,6 +264,11 @@ fn insert_tracks(
             .title(track.title.parse()?)
             .artist_id(artist_id)
             .album_id(album_id)
+            .genre_id(genre_id)
+            .key_id(key_id)
+            .label_id(label_id)
+            .composer_id(composer_id)
+            .remixer_id(remixer_id)
             .file_path(pioneer_path.parse()?)
             .filename(file.file_path.parse()?)
             .sample_rate(file.sample_rate)
@@ -181,6 +278,16 @@ fn insert_tracks(
             .file_size(file.file_size)
             .file_type(file_type.into())
             .tempo(track.tempo)
+            .year(track.year)
+            .track_number(track.track_number)
+            .disc_number(track.disc_number)
+            .rating(track.rating)
+            .color(color_index_from_u8(track.color))
+            .comment(track.comment.parse()?)
+            .isrc(track.isrc.parse()?)
+            .lyricist(track.lyricist.parse()?)
+            .mix_name(track.mix_name.parse()?)
+            .release_date(track.release_date.parse()?)
             .autoload_hotcues("ON".parse()?)
             .date_added(today.parse()?)
             .build();
@@ -200,19 +307,19 @@ fn insert_tracks(
     Ok(exported_count)
 }
 
-/// Insert artist and album rows into the PDB, sorted by their assigned IDs.
-fn insert_artists_and_albums(
-    pdb: &mut Database<File>,
-    artist_map: &ArtistMap,
-    album_map: &AlbumMap,
-) -> Result<(), SyncError> {
+/// Insert artist rows into the PDB, sorted by their assigned IDs.
+fn insert_artists(pdb: &mut Database<File>, artist_map: &ArtistMap) -> Result<(), SyncError> {
     let mut artists_sorted: Vec<_> = artist_map.iter().collect();
     artists_sorted.sort_by_key(|&(_, &id)| id);
     for (name, &id) in artists_sorted {
         let artist = Artist::builder().id(id).name(name.parse()?).build();
         pdb.add_row(Row::Plain(PlainRow::Artist(artist)))?;
     }
+    Ok(())
+}
 
+/// Insert album rows into the PDB, sorted by their assigned IDs.
+fn insert_albums(pdb: &mut Database<File>, album_map: &AlbumMap) -> Result<(), SyncError> {
     let mut albums_sorted: Vec<_> = album_map.iter().collect();
     albums_sorted.sort_by_key(|&(_, &id)| id);
     for ((album_name, artist_id), &id) in albums_sorted {
@@ -223,6 +330,54 @@ fn insert_artists_and_albums(
             .build();
         pdb.add_row(Row::Plain(PlainRow::Album(album)))?;
     }
-
     Ok(())
+}
+
+/// Insert genre rows into the PDB, sorted by their assigned IDs.
+fn insert_genres(pdb: &mut Database<File>, genre_map: &GenreMap) -> Result<(), SyncError> {
+    let mut sorted: Vec<_> = genre_map.iter().collect();
+    sorted.sort_by_key(|&(_, &id)| id);
+    for (name, &id) in sorted {
+        let genre = Genre::builder().id(id).name(name.parse()?).build();
+        pdb.add_row(Row::Plain(PlainRow::Genre(genre)))?;
+    }
+    Ok(())
+}
+
+/// Insert key rows into the PDB, sorted by their assigned IDs.
+fn insert_keys(pdb: &mut Database<File>, key_map: &KeyMap) -> Result<(), SyncError> {
+    let mut sorted: Vec<_> = key_map.iter().collect();
+    sorted.sort_by_key(|&(_, &id)| id);
+    for (name, &id) in sorted {
+        let key = Key::builder().id(id).name(name.parse()?).build();
+        pdb.add_row(Row::Plain(PlainRow::Key(key)))?;
+    }
+    Ok(())
+}
+
+/// Insert label rows into the PDB, sorted by their assigned IDs.
+fn insert_labels(pdb: &mut Database<File>, label_map: &LabelMap) -> Result<(), SyncError> {
+    let mut sorted: Vec<_> = label_map.iter().collect();
+    sorted.sort_by_key(|&(_, &id)| id);
+    for (name, &id) in sorted {
+        let label = Label::builder().id(id).name(name.parse()?).build();
+        pdb.add_row(Row::Plain(PlainRow::Label(label)))?;
+    }
+    Ok(())
+}
+
+/// Map a `u8` color value to a [`ColorIndex`]. This assumes the default colors in rekordbox,
+/// which are the same ones provided by `rekordcrate::defaults`.
+fn color_index_from_u8(value: u8) -> ColorIndex {
+    match value {
+        1 => ColorIndex::Pink,
+        2 => ColorIndex::Red,
+        3 => ColorIndex::Orange,
+        4 => ColorIndex::Yellow,
+        5 => ColorIndex::Green,
+        6 => ColorIndex::Aqua,
+        7 => ColorIndex::Blue,
+        8 => ColorIndex::Purple,
+        _ => ColorIndex::None,
+    }
 }
