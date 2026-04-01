@@ -20,6 +20,7 @@ use crate::ffmpeg;
 use crate::format::SupportedFormat;
 use crate::paths;
 use lofty::prelude::*;
+use lofty::tag::ItemKey;
 use std::collections::HashSet;
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -237,6 +238,21 @@ pub(crate) struct AudioMeta {
     pub title: String,
     pub artist: String,
     pub album: String,
+    pub genre: String,
+    pub composer: String,
+    pub label: String,
+    pub remixer: String,
+    pub key: String,
+    pub comment: String,
+    pub isrc: String,
+    pub lyricist: String,
+    pub mix_name: String,
+    pub release_date: String,
+    pub year: u16,
+    pub track_number: u32,
+    pub disc_number: u16,
+    pub rating: u8,
+    pub color: u8,
     pub duration_secs: u16,
     pub sample_rate: u32,
     pub bitrate: u32,
@@ -256,6 +272,7 @@ impl AudioMeta {
 }
 
 /// Read audio metadata from a file (lofty with ffprobe fallback).
+#[allow(clippy::too_many_lines)]
 pub(crate) fn read_metadata(
     path: &Path,
     fallback_title: &str,
@@ -277,12 +294,61 @@ pub(crate) fn read_metadata(
                 .and_then(|t| t.album().map(|s| s.to_string()))
                 .unwrap_or_default();
 
+            let get_str = |key: ItemKey| -> String {
+                tag.and_then(|t| t.get_string(key).map(std::string::ToString::to_string))
+                    .unwrap_or_default()
+            };
+
+            let genre = get_str(ItemKey::Genre);
+            let composer = get_str(ItemKey::Composer);
+            let label = get_str(ItemKey::Label);
+            let remixer = get_str(ItemKey::Remixer);
+            let key = get_str(ItemKey::InitialKey);
+            let comment = get_str(ItemKey::Comment);
+            let isrc = get_str(ItemKey::Isrc);
+            let lyricist = get_str(ItemKey::Lyricist);
+            let mix_name = get_str(ItemKey::ContentGroup);
+            let release_date = get_str(ItemKey::ReleaseDate);
+
+            let year = tag
+                .and_then(|t| t.get_string(ItemKey::Year))
+                .and_then(|s| s.parse::<u16>().ok())
+                .unwrap_or(0);
+            let track_number = tag.and_then(lofty::tag::Accessor::track).unwrap_or(0);
+            let disc_number = tag
+                .and_then(lofty::tag::Accessor::disk)
+                .and_then(|d| u16::try_from(d).ok())
+                .unwrap_or(0);
+            let rating = tag
+                .and_then(|t| t.get_string(ItemKey::Popularimeter))
+                .and_then(|s| s.parse::<u8>().ok())
+                .unwrap_or(0);
+            let color = tag
+                .and_then(|t| t.get_string(ItemKey::Color))
+                .and_then(|s| s.parse::<u8>().ok())
+                .unwrap_or(0);
+
             let properties = tagged_file.properties();
 
             AudioMeta {
                 title,
                 artist,
                 album,
+                genre,
+                composer,
+                label,
+                remixer,
+                key,
+                comment,
+                isrc,
+                lyricist,
+                mix_name,
+                release_date,
+                year,
+                track_number,
+                disc_number,
+                rating,
+                color,
                 duration_secs: u16::try_from(properties.duration().as_secs()).unwrap_or(u16::MAX),
                 sample_rate: properties.sample_rate().unwrap_or(44100),
                 bitrate: properties.overall_bitrate().unwrap_or(320),
@@ -298,6 +364,21 @@ pub(crate) fn read_metadata(
                         title: meta.title.unwrap_or_else(|| fallback_title.to_string()),
                         artist: meta.artist.unwrap_or_default(),
                         album: meta.album.unwrap_or_default(),
+                        genre: meta.genre.unwrap_or_default(),
+                        composer: String::new(),
+                        label: String::new(),
+                        remixer: String::new(),
+                        key: String::new(),
+                        comment: meta.comment.unwrap_or_default(),
+                        isrc: String::new(),
+                        lyricist: String::new(),
+                        mix_name: String::new(),
+                        release_date: String::new(),
+                        year: meta.year,
+                        track_number: meta.track_number,
+                        disc_number: 0,
+                        rating: 0,
+                        color: 0,
                         duration_secs: meta.duration_secs,
                         sample_rate: meta.sample_rate,
                         bitrate: meta.bitrate,
@@ -305,12 +386,27 @@ pub(crate) fn read_metadata(
                 }
                 Err(probe_err) => {
                     warnings.push(format!(
-                        "{filename}: ffprobe fallback also failed ({probe_err}), using defaults"
+                        "{filename}: ffprobe fallback also failed ({probe_err}), using defaults. You might need to fill in the metadata manually."
                     ));
                     AudioMeta {
                         title: fallback_title.to_string(),
                         artist: String::new(),
                         album: String::new(),
+                        genre: String::new(),
+                        composer: String::new(),
+                        label: String::new(),
+                        remixer: String::new(),
+                        key: String::new(),
+                        comment: String::new(),
+                        isrc: String::new(),
+                        lyricist: String::new(),
+                        mix_name: String::new(),
+                        release_date: String::new(),
+                        year: 0,
+                        track_number: 0,
+                        disc_number: 0,
+                        rating: 0,
+                        color: 0,
                         duration_secs: 0,
                         sample_rate: 44100,
                         bitrate: 0,

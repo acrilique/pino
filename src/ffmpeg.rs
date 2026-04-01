@@ -51,17 +51,25 @@ pub struct ProbeMetadata {
     pub title: Option<String>,
     pub artist: Option<String>,
     pub album: Option<String>,
+    pub genre: Option<String>,
+    pub comment: Option<String>,
+    pub year: u16,
+    pub track_number: u32,
     pub duration_secs: u16,
     pub sample_rate: u32,
     pub bitrate: u32,
 }
 
 /// Extract metadata via ffprobe as a fallback when lofty fails.
+#[allow(clippy::too_many_lines)]
 pub fn probe_metadata(path: &Path) -> Result<ProbeMetadata, String> {
     let output = std::process::Command::new("ffprobe")
         .args(["-v", "error", "-show_entries"])
         .arg("format=duration,bit_rate")
-        .args(["-show_entries", "format_tags=title,artist,album"])
+        .args([
+            "--show_entries",
+            "format_tags=title,artist,album,genre,comment,date,track",
+        ])
         .args(["-show_entries", "stream=sample_rate"])
         .args(["-select_streams", "a:0"])
         .args(["-of", "default=noprint_wrappers=1:nokey=0"])
@@ -78,6 +86,10 @@ pub fn probe_metadata(path: &Path) -> Result<ProbeMetadata, String> {
     let mut title = None;
     let mut artist = None;
     let mut album = None;
+    let mut genre = None;
+    let mut comment = None;
+    let mut year: u16 = 0;
+    let mut track_number: u32 = 0;
     let mut duration_secs: u16 = 0;
     let mut sample_rate: u32 = 44100;
     let mut bitrate: u32 = 0;
@@ -101,6 +113,30 @@ pub fn probe_metadata(path: &Path) -> Result<ProbeMetadata, String> {
                     let v = val.trim();
                     if !v.is_empty() {
                         album = Some(v.to_string());
+                    }
+                }
+                "tag:genre" | "genre" => {
+                    let v = val.trim();
+                    if !v.is_empty() {
+                        genre = Some(v.to_string());
+                    }
+                }
+                "tag:comment" | "comment" => {
+                    let v = val.trim();
+                    if !v.is_empty() {
+                        comment = Some(v.to_string());
+                    }
+                }
+                "tag:date" | "date" => {
+                    let v = val.trim();
+                    if let Some(y) = v.get(..4).and_then(|s| s.parse::<u16>().ok()) {
+                        year = y;
+                    }
+                }
+                "tag:track" | "track" => {
+                    let v = val.trim().split('/').next().unwrap_or("");
+                    if let Ok(n) = v.parse::<u32>() {
+                        track_number = n;
                     }
                 }
                 "duration" => {
@@ -131,6 +167,10 @@ pub fn probe_metadata(path: &Path) -> Result<ProbeMetadata, String> {
         title,
         artist,
         album,
+        genre,
+        comment,
+        year,
+        track_number,
         duration_secs,
         sample_rate,
         bitrate,
