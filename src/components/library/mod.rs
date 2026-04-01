@@ -11,6 +11,8 @@ mod editable_cell;
 mod rating_cell;
 mod sortable_header;
 
+use std::collections::HashSet;
+
 use crate::prefs::{self, Column, SortKey, SortOrder};
 use crate::task::{db_op, spawn_blocking};
 use crate::{db, paths, sync};
@@ -54,7 +56,7 @@ enum ContextTarget {
         format: String,
     },
     Track {
-        track_id: String,
+        track_ids: Vec<String>,
     },
 }
 
@@ -71,6 +73,8 @@ pub fn Library(
     let mut context_menu = use_signal(|| None::<ContextMenu>);
     let mut import_warnings: Signal<Vec<String>> = use_signal(Vec::new);
     let mut hidden_cols = use_signal(prefs::load_hidden_columns);
+    let mut selected_tracks: Signal<HashSet<String>> = use_signal(HashSet::new);
+    let mut last_clicked: Signal<Option<String>> = use_signal(|| None);
 
     let sorted_tracks = use_memo(move || {
         let mut list = tracks();
@@ -460,21 +464,72 @@ pub fn Library(
                         }
                     }
                     tbody {
-                        for twf in sorted_tracks() {
+                        for (row_idx, twf) in sorted_tracks().into_iter().enumerate() {
                             {
                                 let track_id = twf.track.id.clone();
+                                let is_selected = selected_tracks.read().contains(&track_id);
                                 rsx! {
                                     tr {
                                         id: "track-{track_id}",
+                                        class: if is_selected { "selected" },
+                                        onclick: {
+                                            let track_id = track_id.clone();
+                                            move |e: MouseEvent| {
+                                                let modifiers = e.modifiers();
+                                                if modifiers.contains(Modifiers::SHIFT) {
+                                                    e.prevent_default();
+                                                }
+                                                if modifiers.contains(Modifiers::CONTROL) || modifiers.contains(Modifiers::META) {
+                                                    // Ctrl/Cmd+click: toggle individual row
+                                                    let mut sel = selected_tracks.write();
+                                                    if sel.contains(&track_id) {
+                                                        sel.remove(&track_id);
+                                                    } else {
+                                                        sel.insert(track_id.clone());
+                                                    }
+                                                    last_clicked.set(Some(track_id.clone()));
+                                                } else if modifiers.contains(Modifiers::SHIFT) {
+                                                    // Shift+click: range select
+                                                    let sorted = sorted_tracks();
+                                                    let anchor = last_clicked().and_then(|id| {
+                                                        sorted.iter().position(|t| t.track.id == id)
+                                                    }).unwrap_or(0);
+                                                    let (start, end) = if anchor <= row_idx {
+                                                        (anchor, row_idx)
+                                                    } else {
+                                                        (row_idx, anchor)
+                                                    };
+                                                    let mut sel = selected_tracks.write();
+                                                    for t in &sorted[start..=end] {
+                                                        sel.insert(t.track.id.clone());
+                                                    }
+                                                } else {
+                                                    // Plain click: select only this row
+                                                    let mut sel = selected_tracks.write();
+                                                    sel.clear();
+                                                    sel.insert(track_id.clone());
+                                                    last_clicked.set(Some(track_id.clone()));
+                                                }
+                                            }
+                                        },
                                         oncontextmenu: {
                                             let track_id = track_id.clone();
                                             move |e: MouseEvent| {
                                                 e.prevent_default();
+                                                // If right-clicked track is already selected, operate on whole selection
+                                                // Otherwise, select just this track
+                                                if !selected_tracks.read().contains(&track_id) {
+                                                    let mut sel = selected_tracks.write();
+                                                    sel.clear();
+                                                    sel.insert(track_id.clone());
+                                                    last_clicked.set(Some(track_id.clone()));
+                                                }
+                                                let ids: Vec<String> = selected_tracks.read().iter().cloned().collect();
                                                 context_menu.set(Some(ContextMenu {
                                                     x: e.page_coordinates().x,
                                                     y: e.page_coordinates().y,
                                                     target: ContextTarget::Track {
-                                                        track_id: track_id.clone(),
+                                                        track_ids: ids,
                                                     },
                                                 }));
                                             }
@@ -757,22 +812,33 @@ pub fn Library(
                                 "Remove {format} file"
                             }
                         },
-                        ContextTarget::Track { track_id } => rsx! {
-                            button {
-                                class: "context-item danger",
-                                onclick: move |_| {
-                                    let track_id = track_id.clone();
-                                    context_menu.set(None);
+                        ContextTarget::Track { track_ids } => {
+                            let label = if track_ids.len() == 1 {
+                                "Remove track".to_string()
+                            } else {
+                                format!("Remove {} tracks", track_ids.len())
+                            };
+                            rsx! {
+                                button {
+                                    class: "context-item danger",
+                                    onclick: move |_| {
+                                        let ids = track_ids.clone();
+                                        context_menu.set(None);
+                                        selected_tracks.write().clear();
 
-                                    tracks.write().retain(|t| t.track.id != track_id);
+                                        let id_set: HashSet<String> = ids.iter().cloned().collect();
+                                        tracks.write().retain(|t| !id_set.contains(&t.track.id));
 
-                                    spawn(async move {
-                                        let _ = db_op(move |lib| lib.delete_track(&track_id)).await;
-                                    });
-                                },
-                                "Remove track"
+                                        spawn(async move {
+                                            for id in ids {
+                                                let _ = db_op(move |lib| lib.delete_track(&id)).await;
+                                            }
+                                        });
+                                    },
+                                    "{label}"
+                                }
                             }
-                        },
+                        }
                     }
                 }
             }

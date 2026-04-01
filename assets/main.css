@@ -486,6 +486,19 @@ input[type="checkbox"] {
     background: var(--bg-elevated);
 }
 
+.track-list tbody tr.selected {
+    background: var(--accent-bg);
+}
+
+.track-list tbody tr.selected:hover {
+    background: #ffe8c0;
+}
+
+.track-list tbody {
+    -webkit-user-select: none;
+    user-select: none;
+}
+
 .formats-cell {
     display: flex;
     gap: 4px;
