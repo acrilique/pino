@@ -23,7 +23,12 @@ pub fn EditableCell(
     mut editing: Signal<Option<(String, EditColumn)>>,
     mut edit_value: Signal<String>,
     on_commit: EventHandler,
+    #[props(default)] hidden: bool,
 ) -> Element {
+    if hidden {
+        return rsx! {};
+    }
+
     let col_suffix = match column {
         EditColumn::Title => "title",
         EditColumn::Artist => "artist",

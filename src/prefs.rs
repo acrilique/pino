@@ -8,6 +8,7 @@
 
 use crate::paths;
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::path::PathBuf;
 
 const PREFS_FILE: &str = "prefs.toml";
@@ -24,6 +25,8 @@ struct Prefs {
     col_widths: Vec<f64>,
     #[serde(rename = "destDir", default)]
     dest_dir: String,
+    #[serde(rename = "hiddenColumns", default)]
+    hidden_columns: Vec<String>,
 }
 
 impl Prefs {
@@ -132,5 +135,71 @@ pub fn load_dest_dir() -> String {
 pub fn save_dest_dir(dir: &str) {
     let mut prefs = Prefs::load();
     prefs.dest_dir = dir.to_string();
+    prefs.save();
+}
+
+// ── Column visibility ─────────────────────────────────────────────────────────
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Column {
+    Title,
+    Artist,
+    Album,
+    Formats,
+    Duration,
+}
+
+impl Column {
+    pub const ALL: &[Column] = &[
+        Column::Title,
+        Column::Artist,
+        Column::Album,
+        Column::Formats,
+        Column::Duration,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Column::Title => "Title",
+            Column::Artist => "Artist",
+            Column::Album => "Album",
+            Column::Formats => "Formats",
+            Column::Duration => "Duration",
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Column::Title => "title",
+            Column::Artist => "artist",
+            Column::Album => "album",
+            Column::Formats => "formats",
+            Column::Duration => "duration",
+        }
+    }
+
+    fn from_str(s: &str) -> Option<Column> {
+        match s {
+            "title" => Some(Column::Title),
+            "artist" => Some(Column::Artist),
+            "album" => Some(Column::Album),
+            "formats" => Some(Column::Formats),
+            "duration" => Some(Column::Duration),
+            _ => None,
+        }
+    }
+}
+
+pub fn load_hidden_columns() -> HashSet<Column> {
+    Prefs::load()
+        .hidden_columns
+        .iter()
+        .filter_map(|s| Column::from_str(s))
+        .collect()
+}
+
+pub fn save_hidden_columns(hidden: &HashSet<Column>) {
+    let mut prefs = Prefs::load();
+    prefs.hidden_columns = hidden.iter().map(|c| c.as_str().to_string()).collect();
     prefs.save();
 }

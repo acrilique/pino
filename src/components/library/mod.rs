@@ -9,7 +9,7 @@
 mod editable_cell;
 mod sortable_header;
 
-use crate::prefs::{self, SortKey, SortOrder};
+use crate::prefs::{self, Column, SortKey, SortOrder};
 use crate::task::{db_op, spawn_blocking};
 use crate::{db, paths, sync};
 use dioxus::prelude::*;
@@ -46,6 +46,7 @@ struct ContextMenu {
 
 #[derive(Clone, PartialEq)]
 enum ContextTarget {
+    Header,
     File {
         file_id: String,
         track_id: String,
@@ -68,6 +69,7 @@ pub fn Library(
     let edit_value = use_signal(String::new);
     let mut context_menu = use_signal(|| None::<ContextMenu>);
     let mut import_warnings: Signal<Vec<String>> = use_signal(Vec::new);
+    let mut hidden_cols = use_signal(prefs::load_hidden_columns);
     let col_widths = prefs::load_col_widths().unwrap_or_default();
 
     let sorted_tracks = use_memo(move || {
@@ -290,18 +292,36 @@ pub fn Library(
                 table {
                     thead {
                         tr {
-                            SortableHeader { label: "Title", col_key: SortKey::Title, sort_key, sort_order, resizable: true, initial_width: col_widths.first().map(|w| format!("{w}%")) }
-                            SortableHeader { label: "Artist", col_key: SortKey::Artist, sort_key, sort_order, resizable: true, initial_width: col_widths.get(1).map(|w| format!("{w}%")) }
-                            SortableHeader { label: "Album", col_key: SortKey::Album, sort_key, sort_order, resizable: true, initial_width: col_widths.get(2).map(|w| format!("{w}%")) }
-                            th {
-                                width: col_widths.get(3).map(|w| format!("{w}%")),
-                                "Formats"
-                                div {
-                                    class: "col-resizer",
-                                    onclick: |e: MouseEvent| e.stop_propagation(),
+                            oncontextmenu: move |e: MouseEvent| {
+                                e.prevent_default();
+                                context_menu.set(Some(ContextMenu {
+                                    x: e.page_coordinates().x,
+                                    y: e.page_coordinates().y,
+                                    target: ContextTarget::Header,
+                                }));
+                            },
+                            if !hidden_cols.read().contains(&Column::Title) {
+                                SortableHeader { label: "Title", col_key: SortKey::Title, sort_key, sort_order, resizable: true, initial_width: col_widths.first().map(|w| format!("{w}%")) }
+                            }
+                            if !hidden_cols.read().contains(&Column::Artist) {
+                                SortableHeader { label: "Artist", col_key: SortKey::Artist, sort_key, sort_order, resizable: true, initial_width: col_widths.get(1).map(|w| format!("{w}%")) }
+                            }
+                            if !hidden_cols.read().contains(&Column::Album) {
+                                SortableHeader { label: "Album", col_key: SortKey::Album, sort_key, sort_order, resizable: true, initial_width: col_widths.get(2).map(|w| format!("{w}%")) }
+                            }
+                            if !hidden_cols.read().contains(&Column::Formats) {
+                                th {
+                                    width: col_widths.get(3).map(|w| format!("{w}%")),
+                                    "Formats"
+                                    div {
+                                        class: "col-resizer",
+                                        onclick: |e: MouseEvent| e.stop_propagation(),
+                                    }
                                 }
                             }
-                            SortableHeader { label: "Duration", col_key: SortKey::Duration, sort_key, sort_order, resizable: false, initial_width: col_widths.get(4).map(|w| format!("{w}%")) }
+                            if !hidden_cols.read().contains(&Column::Duration) {
+                                SortableHeader { label: "Duration", col_key: SortKey::Duration, sort_key, sort_order, resizable: false, initial_width: col_widths.get(4).map(|w| format!("{w}%")) }
+                            }
                         }
                     }
                     tbody {
@@ -331,6 +351,7 @@ pub fn Library(
                                             editing,
                                             edit_value,
                                             on_commit: move |()| commit_edit(),
+                                            hidden: hidden_cols.read().contains(&Column::Title),
                                         }
                                         EditableCell {
                                             track_id: track_id.clone(),
@@ -339,6 +360,7 @@ pub fn Library(
                                             editing,
                                             edit_value,
                                             on_commit: move |()| commit_edit(),
+                                            hidden: hidden_cols.read().contains(&Column::Artist),
                                         }
                                         EditableCell {
                                             track_id: track_id.clone(),
@@ -347,35 +369,40 @@ pub fn Library(
                                             editing,
                                             edit_value,
                                             on_commit: move |()| commit_edit(),
+                                            hidden: hidden_cols.read().contains(&Column::Album),
                                         }
-                                        td { class: "formats-cell",
-                                            for file in &twf.files {
-                                                {
-                                                    let file_id = file.id.clone();
-                                                    let track_id_for_file = track_id.clone();
-                                                    let fmt = file.format.clone();
-                                                    rsx! {
-                                                        span {
-                                                            class: "format-badge",
-                                                            oncontextmenu: move |e: MouseEvent| {
-                                                                e.prevent_default();
-                                                                context_menu.set(Some(ContextMenu {
-                                                                    x: e.page_coordinates().x,
-                                                                    y: e.page_coordinates().y,
-                                                                    target: ContextTarget::File {
-                                                                        file_id: file_id.clone(),
-                                                                        track_id: track_id_for_file.clone(),
-                                                                        format: fmt.clone(),
-                                                                    },
-                                                                }));
-                                                            },
-                                                            "{file.format}"
+                                        if !hidden_cols.read().contains(&Column::Formats) {
+                                            td { class: "formats-cell",
+                                                for file in &twf.files {
+                                                    {
+                                                        let file_id = file.id.clone();
+                                                        let track_id_for_file = track_id.clone();
+                                                        let fmt = file.format.clone();
+                                                        rsx! {
+                                                            span {
+                                                                class: "format-badge",
+                                                                oncontextmenu: move |e: MouseEvent| {
+                                                                    e.prevent_default();
+                                                                    context_menu.set(Some(ContextMenu {
+                                                                        x: e.page_coordinates().x,
+                                                                        y: e.page_coordinates().y,
+                                                                        target: ContextTarget::File {
+                                                                            file_id: file_id.clone(),
+                                                                            track_id: track_id_for_file.clone(),
+                                                                            format: fmt.clone(),
+                                                                        },
+                                                                    }));
+                                                                },
+                                                                "{file.format}"
+                                                            }
                                                         }
                                                     }
                                                 }
                                             }
                                         }
-                                        td { "{format_duration(twf.track.duration_secs)}" }
+                                        if !hidden_cols.read().contains(&Column::Duration) {
+                                            td { "{format_duration(twf.track.duration_secs)}" }
+                                        }
                                     }
                                 }
                             }
@@ -398,6 +425,29 @@ pub fn Library(
                     class: "context-menu",
                     style: "left: {menu.x}px; top: {menu.y}px;",
                     match menu.target.clone() {
+                        ContextTarget::Header => rsx! {
+                            for &col in Column::ALL {
+                                {
+                                    let visible = !hidden_cols.read().contains(&col);
+                                    rsx! {
+                                        button {
+                                            class: "context-item col-toggle",
+                                            onclick: move |_| {
+                                                let mut h = hidden_cols.write();
+                                                if h.contains(&col) {
+                                                    h.remove(&col);
+                                                } else {
+                                                    h.insert(col);
+                                                }
+                                                prefs::save_hidden_columns(&h);
+                                            },
+                                            span { class: "col-check", if visible { "✓" } }
+                                            "{col.label()}"
+                                        }
+                                    }
+                                }
+                            }
+                        },
                         ContextTarget::File { file_id, track_id, format } => rsx! {
                             button {
                                 class: "context-item danger",
