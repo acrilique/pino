@@ -1,0 +1,51 @@
+---
+default_language_version:
+    python: python3
+repos:
+    - repo: https://github.com/pre-commit/pre-commit-hooks
+      rev: 3e8a8703264a2f4a69428a0aa4dcb512790b2c8c  # frozen: v6.0.0
+      hooks:
+          - id: check-case-conflict
+          - id: check-json
+          - id: check-merge-conflict
+          - id: check-symlinks
+          - id: check-toml
+          - id: check-xml
+          - id: check-yaml
+          - id: destroyed-symlinks
+          - id: end-of-file-fixer
+          - id: fix-byte-order-marker
+          - id: forbid-new-submodules
+          - id: mixed-line-ending
+          - id: trailing-whitespace
+    - repo: https://github.com/codespell-project/codespell
+      rev: 63c8f8312b7559622c0d82815639671ae42132ac  # frozen: v2.4.1
+      hooks:
+          - id: codespell
+            args: [--ignore-words=.codespellignore]
+    - repo: https://github.com/jumanjihouse/pre-commit-hook-yamlfmt
+      rev: 8d1b9cadaf854cb25bb0b0f5870e1cc66a083d6b  # frozen: 0.2.3
+      hooks:
+          - id: yamlfmt
+    - repo: https://github.com/gitleaks/gitleaks
+      rev: 39fdb480a06768cc41a84ef86959c07ff33091c4  # frozen: v8.28.0
+      hooks:
+          - id: gitleaks
+    - repo: https://github.com/woodruffw/zizmor-pre-commit
+      rev: 122d24ec728f140b38330ae8b04e3c5fe8b774c5  # frozen: v1.15.2
+      hooks:
+          - id: zizmor
+    - repo: https://github.com/doublify/pre-commit-rust
+      rev: eeee35a89e69d5772bdee97db1a6a898467b686e  # frozen: v1.0
+      hooks:
+          - id: fmt
+            args: [--all, --]
+          - id: clippy
+            args: [--locked, --workspace, --all-features, --all-targets, --, -D, warnings]
+    - repo: https://github.com/jorisroovers/gitlint
+      rev: acc9d9de6369b76d22cb4167029d2035e8730b98  # frozen: v0.19.1
+      hooks:
+          - id: gitlint
+
+ci:
+    skip: [fmt, clippy]

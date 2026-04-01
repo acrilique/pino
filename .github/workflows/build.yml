@@ -1,3 +1,4 @@
+---
 name: Build and Test
 on:
     push:
@@ -26,6 +27,8 @@ jobs:
         steps:
             - name: Checkout code
               uses: actions/checkout@v6
+              with:
+                  persist-credentials: false
 
             - name: Install Linux dependencies
               if: runner.os == 'Linux'
@@ -65,7 +68,8 @@ jobs:
 
             - name: Install cargo-binstall
               if: runner.os != 'Windows'
-              run: curl -L --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh | bash
+              run: curl -L --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh
+                  | bash
 
             - name: Install OpenSSL
               if: runner.os == 'macOS'
@@ -78,7 +82,7 @@ jobs:
               run: dx bundle --release --desktop --package-types "${{ matrix.package-types }}"
               env:
                   NO_STRIP: ${{ matrix.no-strip }}
-                  APPLE_SIGNING_IDENTITY: "Developer ID Application: Lluc Simó Margalef (BJPC4PHT7X)"
+                  APPLE_SIGNING_IDENTITY: 'Developer ID Application: Lluc Simó Margalef (BJPC4PHT7X)'
 
             - name: Notarize DMG
               if: runner.os == 'macOS'
