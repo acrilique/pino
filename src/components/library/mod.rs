@@ -813,12 +813,33 @@ pub fn Library(
                             }
                         },
                         ContextTarget::Track { track_ids } => {
-                            let label = if track_ids.len() == 1 {
+                            let remove_label = if track_ids.len() == 1 {
                                 "Remove track".to_string()
                             } else {
                                 format!("Remove {} tracks", track_ids.len())
                             };
+                            let play_label = if track_ids.len() == 1 {
+                                "Play track".to_string()
+                            } else {
+                                format!("Play {} tracks", track_ids.len())
+                            };
+                            let play_ids = track_ids.clone();
                             rsx! {
+                                button {
+                                    class: "context-item",
+                                    onclick: move |_| {
+                                        let ids = play_ids.clone();
+                                        context_menu.set(None);
+                                        let r = tracks.read();
+                                        for id in &ids {
+                                            if let Some(twf) = r.iter().find(|t| t.track.id == *id)
+                                                && let Some(file) = twf.files.first() {
+                                                    let _ = open::that(&file.file_path);
+                                                }
+                                        }
+                                    },
+                                    "{play_label}"
+                                }
                                 button {
                                     class: "context-item danger",
                                     onclick: move |_| {
@@ -835,7 +856,7 @@ pub fn Library(
                                             }
                                         });
                                     },
-                                    "{label}"
+                                    "{remove_label}"
                                 }
                             }
                         }
