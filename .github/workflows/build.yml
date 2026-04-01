@@ -124,7 +124,7 @@ jobs:
               uses: actions/upload-artifact@v7
               with:
                   name: pino-${{ runner.os }}
-                  path: target/dx/pino/bundle/macos/**/*.dmg
+                  path: target/dx/pino/bundle/macos/macos/Pino_*.dmg
 
             - name: Clean up keychain
               if: runner.os == 'macOS' && always()
