@@ -1,6 +1,6 @@
 [package]
 name = "pino"
-version = "0.1.0"
+version = "0.2.0"
 authors = ["Lluc Simó Margalef <lluc.simo@protonmail.com>"]
 description = "Experimental app to export audio files generating a Pioneer-compatible USB drive"
 license = "MPL-2.0"
