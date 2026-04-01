@@ -30,7 +30,8 @@
             handle: e.target,
             startX: e.pageX,
             startWidth: th.offsetWidth,
-            tableStartWidth: totalW
+            tableStartWidth: totalW,
+            containerWidth: el.clientWidth
         };
         e.target.classList.add('active');
         document.body.style.cursor = 'col-resize';
@@ -42,11 +43,21 @@
         var delta = e.pageX - resizing.startX;
         var minW = 80;
         var newW = Math.max(minW, resizing.startWidth + delta);
-        resizing.th.style.width = newW + 'px';
-        // Adjust table width so it grows/shrinks with the column
-        if (table) {
-            table.style.width = (resizing.tableStartWidth + (newW - resizing.startWidth)) + 'px';
+        // Don't let the total table width shrink below the visible container width
+        var newTableW = resizing.tableStartWidth + (newW - resizing.startWidth);
+        if (newTableW < resizing.containerWidth) {
+            newW = resizing.startWidth - (resizing.tableStartWidth - resizing.containerWidth);
+            newW = Math.max(minW, newW);
+            newTableW = resizing.containerWidth;
         }
+        resizing.th.style.width = newW + 'px';
+        if (table) {
+            table.style.width = newTableW + 'px';
+        }
+        // Clamp scroll so no empty space appears on the right
+        var maxScroll = table.offsetWidth - el.clientWidth;
+        if (maxScroll < 0) maxScroll = 0;
+        if (el.scrollLeft > maxScroll) el.scrollLeft = maxScroll;
     });
     document.addEventListener('mouseup', function() {
         if (resizing) {
