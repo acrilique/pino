@@ -78,14 +78,15 @@ fn import_tracks(db: &Library, audio_files: &[(PathBuf, Option<SupportedFormat>)
         let file_size = file_size_on_disk(src_path);
 
         let track_id = super::new_id();
-        let track = Track::new(
-            track_id.clone(),
-            meta.title,
-            meta.artist,
-            meta.album,
-            meta.duration_secs,
-            super::today(),
-        );
+        let track = Track {
+            id: track_id.clone(),
+            title: meta.title,
+            artist: meta.artist,
+            album: meta.album,
+            duration_secs: meta.duration_secs,
+            tempo: 0,
+            added_at: super::today(),
+        };
 
         let file = TrackFile {
             id: super::new_id(),

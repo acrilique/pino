@@ -10,29 +10,6 @@ use rusqlite::{Connection, Row, params};
 use std::collections::HashSet;
 use std::path::Path;
 
-// ── Track ─────────────────────────────────────────────────────────────────────
-
-impl Track {
-    pub fn new(
-        id: String,
-        title: String,
-        artist: String,
-        album: String,
-        duration_secs: u16,
-        added_at: String,
-    ) -> Self {
-        Self {
-            id,
-            title,
-            artist,
-            album,
-            duration_secs,
-            tempo: 0,
-            added_at,
-        }
-    }
-}
-
 #[derive(Debug, Clone, PartialEq)]
 pub struct Track {
     pub id: String,
@@ -43,8 +20,6 @@ pub struct Track {
     pub tempo: u32,
     pub added_at: String,
 }
-
-// ── TrackFile ─────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct TrackFile {
