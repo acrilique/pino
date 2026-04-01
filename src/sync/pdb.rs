@@ -12,8 +12,8 @@ use crate::format::SupportedFormat;
 use rekordcrate::pdb::io::Database;
 use rekordcrate::pdb::string::DeviceSQLString;
 use rekordcrate::pdb::{
-    Album, Artist, DatabaseType, Genre, History, Key, Label, PageType, PlainPageType, PlainRow,
-    Row, Subtype,
+    Album, Artist, Artwork, DatabaseType, Genre, History, Key, Label, PageType, PlainPageType,
+    PlainRow, Row, Subtype,
 };
 use rekordcrate::util::ColorIndex;
 use std::collections::HashMap;
@@ -25,6 +25,7 @@ type AlbumMap = HashMap<(String, u32), u32>;
 type GenreMap = HashMap<String, u32>;
 type KeyMap = HashMap<String, u32>;
 type LabelMap = HashMap<String, u32>;
+type ArtworkMap = HashMap<String, u32>;
 
 struct IdMaps {
     artists: ArtistMap,
@@ -32,6 +33,7 @@ struct IdMaps {
     genres: GenreMap,
     keys: KeyMap,
     labels: LabelMap,
+    artworks: ArtworkMap,
 }
 
 /// Generate a Pioneer PDB database from all tracks in the given library.
@@ -47,6 +49,8 @@ pub(super) fn generate_pdb(db: &Library, dest_dir: &Path) -> Result<(), SyncErro
 
     let maps = build_id_maps(&all);
 
+    copy_artwork_to_device(&all, &maps.artworks, dest_dir)?;
+
     let mut pdb = create_pdb(&rekordbox_dir)?;
 
     let today = today();
@@ -56,6 +60,7 @@ pub(super) fn generate_pdb(db: &Library, dest_dir: &Path) -> Result<(), SyncErro
     insert_genres(&mut pdb, &maps.genres)?;
     insert_keys(&mut pdb, &maps.keys)?;
     insert_labels(&mut pdb, &maps.labels)?;
+    insert_artworks(&mut pdb, &maps.artworks)?;
 
     rekordcrate::pdb::defaults::insert_default_colors(&mut pdb)?;
     rekordcrate::pdb::defaults::insert_default_columns(&mut pdb)?;
@@ -73,13 +78,14 @@ pub(super) fn generate_pdb(db: &Library, dest_dir: &Path) -> Result<(), SyncErro
     pdb.close()?;
 
     println!(
-        "PDB: {} track(s), {} artist(s), {} album(s), {} genre(s), {} key(s), {} label(s)",
+        "PDB: {} track(s), {} artist(s), {} album(s), {} genre(s), {} key(s), {} label(s), {} artwork(s)",
         exported_count,
         maps.artists.len(),
         maps.albums.len(),
         maps.genres.len(),
         maps.keys.len(),
         maps.labels.len(),
+        maps.artworks.len(),
     );
 
     Ok(())
@@ -99,6 +105,8 @@ fn build_id_maps(all: &[TrackWithFiles]) -> IdMaps {
     let mut next_key_id: u32 = 1;
     let mut label_map: LabelMap = HashMap::new();
     let mut next_label_id: u32 = 1;
+    let mut artwork_map: ArtworkMap = HashMap::new();
+    let mut next_artwork_id: u32 = 1;
 
     for twf in all {
         let track = &twf.track;
@@ -152,6 +160,12 @@ fn build_id_maps(all: &[TrackWithFiles]) -> IdMaps {
             label_map.insert(track.label.clone(), next_label_id);
             next_label_id += 1;
         }
+
+        // Artwork (keyed by local artwork_path which is a content-hash filename)
+        if !track.artwork_path.is_empty() && !artwork_map.contains_key(&track.artwork_path) {
+            artwork_map.insert(track.artwork_path.clone(), next_artwork_id);
+            next_artwork_id += 1;
+        }
     }
 
     IdMaps {
@@ -160,6 +174,7 @@ fn build_id_maps(all: &[TrackWithFiles]) -> IdMaps {
         genres: genre_map,
         keys: key_map,
         labels: label_map,
+        artworks: artwork_map,
     }
 }
 
@@ -248,6 +263,11 @@ fn insert_tracks(
         } else {
             maps.artists[&track.remixer]
         };
+        let artwork_id = if track.artwork_path.is_empty() {
+            0
+        } else {
+            maps.artworks[&track.artwork_path]
+        };
 
         let pioneer_path = format!("/Contents/{}", file.file_path);
 
@@ -269,6 +289,7 @@ fn insert_tracks(
             .label_id(label_id)
             .composer_id(composer_id)
             .remixer_id(remixer_id)
+            .artwork_id(artwork_id)
             .file_path(pioneer_path.parse()?)
             .filename(file.file_path.parse()?)
             .sample_rate(file.sample_rate)
@@ -362,6 +383,62 @@ fn insert_labels(pdb: &mut Database<File>, label_map: &LabelMap) -> Result<(), S
     for (name, &id) in sorted {
         let label = Label::builder().id(id).name(name.parse()?).build();
         pdb.add_row(Row::Plain(PlainRow::Label(label)))?;
+    }
+    Ok(())
+}
+
+/// Copy artwork files to PIONEER/Artwork/ on the destination device.
+///
+/// Each unique `artwork_path` (local cache file) is copied once, using its artwork ID
+/// to build a device-relative path that the PDB will reference.
+fn copy_artwork_to_device(
+    all: &[TrackWithFiles],
+    artwork_map: &ArtworkMap,
+    dest_dir: &Path,
+) -> Result<(), SyncError> {
+    if artwork_map.is_empty() {
+        return Ok(());
+    }
+
+    let art_dest = dest_dir.join("PIONEER").join("Artwork");
+    std::fs::create_dir_all(&art_dest)?;
+
+    // Collect unique artwork paths that actually exist.
+    let mut copied = std::collections::HashSet::new();
+    for twf in all {
+        let art = &twf.track.artwork_path;
+        if art.is_empty() || copied.contains(art) {
+            continue;
+        }
+
+        let src = std::path::Path::new(art);
+        if !src.exists() {
+            eprintln!("  Warning: artwork file not found: {art}");
+            continue;
+        }
+
+        let ext = src.extension().and_then(|e| e.to_str()).unwrap_or("jpg");
+        let id = artwork_map[art];
+        let dest_name = format!("{id}.{ext}");
+        std::fs::copy(src, art_dest.join(&dest_name))?;
+        copied.insert(art.clone());
+    }
+
+    Ok(())
+}
+
+/// Insert artwork rows into the PDB, sorted by their assigned IDs.
+fn insert_artworks(pdb: &mut Database<File>, artwork_map: &ArtworkMap) -> Result<(), SyncError> {
+    let mut sorted: Vec<_> = artwork_map.iter().collect();
+    sorted.sort_by_key(|&(_, &id)| id);
+    for (local_path, &id) in sorted {
+        let ext = std::path::Path::new(local_path)
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("jpg");
+        let device_path = format!("/Artwork/{id}.{ext}");
+        let artwork = Artwork::builder().id(id).path(device_path.parse()?).build();
+        pdb.add_row(Row::Plain(PlainRow::Artwork(artwork)))?;
     }
     Ok(())
 }

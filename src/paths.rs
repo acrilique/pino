@@ -17,3 +17,7 @@ pub fn data_dir() -> PathBuf {
 pub fn db_path() -> PathBuf {
     data_dir().join("library.db")
 }
+
+pub fn artwork_dir() -> PathBuf {
+    data_dir().join("artwork")
+}

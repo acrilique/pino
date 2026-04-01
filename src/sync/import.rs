@@ -100,6 +100,7 @@ fn import_tracks(db: &Library, audio_files: &[(PathBuf, Option<SupportedFormat>)
             disc_number: meta.disc_number,
             rating: meta.rating,
             color: meta.color,
+            artwork_path: meta.artwork_path,
             added_at: super::today(),
         };
 

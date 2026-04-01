@@ -253,6 +253,7 @@ pub(crate) struct AudioMeta {
     pub disc_number: u16,
     pub rating: u8,
     pub color: u8,
+    pub artwork_path: String,
     pub duration_secs: u16,
     pub sample_rate: u32,
     pub bitrate: u32,
@@ -269,6 +270,65 @@ impl AudioMeta {
         }
         self
     }
+}
+
+/// Extract the first front-cover (or first available) picture from a lofty tag,
+/// write it to the artwork cache directory using a content-hash filename, and
+/// return the cache path. Returns an empty string if no picture is found.
+fn extract_artwork(tag: Option<&lofty::tag::Tag>, warnings: &SyncWarnings) -> String {
+    use lofty::picture::PictureType;
+    use sha2::{Digest, Sha256};
+
+    let Some(tag) = tag else { return String::new() };
+
+    let pictures = tag.pictures();
+    if pictures.is_empty() {
+        return String::new();
+    }
+
+    // Prefer front cover, fall back to first available.
+    let picture = pictures
+        .iter()
+        .find(|p| p.pic_type() == PictureType::CoverFront)
+        .unwrap_or(&pictures[0]);
+
+    let data = picture.data();
+    if data.is_empty() {
+        return String::new();
+    }
+
+    let ext = picture
+        .mime_type()
+        .and_then(lofty::picture::MimeType::ext)
+        .unwrap_or("jpg");
+
+    let hash = {
+        let digest = Sha256::digest(data);
+        digest.iter().fold(String::with_capacity(64), |mut s, b| {
+            use std::fmt::Write;
+            let _ = write!(s, "{b:02x}");
+            s
+        })
+    };
+    let filename = format!("{hash}.{ext}");
+
+    let art_dir = crate::paths::artwork_dir();
+    if let Err(e) = std::fs::create_dir_all(&art_dir) {
+        warnings.push(format!("Failed to create artwork dir: {e}"));
+        return String::new();
+    }
+
+    let dest = art_dir.join(&filename);
+    if dest.exists() {
+        return dest.to_string_lossy().into_owned();
+    }
+
+    if let Err(e) = std::fs::write(&dest, data) {
+        warnings.push(format!("Failed to write artwork {filename}: {e}"));
+        return String::new();
+    }
+
+    dest.to_string_lossy().into_owned()
 }
 
 /// Read audio metadata from a file (lofty with ffprobe fallback).
@@ -330,6 +390,8 @@ pub(crate) fn read_metadata(
 
             let properties = tagged_file.properties();
 
+            let artwork_path = extract_artwork(tag, warnings);
+
             AudioMeta {
                 title,
                 artist,
@@ -349,6 +411,7 @@ pub(crate) fn read_metadata(
                 disc_number,
                 rating,
                 color,
+                artwork_path,
                 duration_secs: u16::try_from(properties.duration().as_secs()).unwrap_or(u16::MAX),
                 sample_rate: properties.sample_rate().unwrap_or(44100),
                 bitrate: properties.overall_bitrate().unwrap_or(320),
@@ -379,6 +442,7 @@ pub(crate) fn read_metadata(
                         disc_number: 0,
                         rating: 0,
                         color: 0,
+                        artwork_path: String::new(),
                         duration_secs: meta.duration_secs,
                         sample_rate: meta.sample_rate,
                         bitrate: meta.bitrate,
@@ -407,6 +471,7 @@ pub(crate) fn read_metadata(
                         disc_number: 0,
                         rating: 0,
                         color: 0,
+                        artwork_path: String::new(),
                         duration_secs: 0,
                         sample_rate: 44100,
                         bitrate: 0,

@@ -35,6 +35,7 @@ pub struct Track {
     pub disc_number: u16,
     pub rating: u8,
     pub color: u8,
+    pub artwork_path: String,
     pub added_at: String,
 }
 
@@ -73,7 +74,8 @@ fn track_from_row(row: &Row) -> rusqlite::Result<Track> {
         disc_number: row.get(18)?,
         rating: row.get(19)?,
         color: row.get(20)?,
-        added_at: row.get(21)?,
+        artwork_path: row.get(21)?,
+        added_at: row.get(22)?,
     })
 }
 
@@ -123,6 +125,7 @@ impl Library {
 
         if has_files_table {
             self.migrate_extended_metadata()?;
+            self.migrate_artwork_path()?;
             return Ok(());
         }
 
@@ -187,6 +190,7 @@ impl Library {
                     disc_number INTEGER NOT NULL DEFAULT 0,
                     rating INTEGER NOT NULL DEFAULT 0,
                     color INTEGER NOT NULL DEFAULT 0,
+                    artwork_path TEXT NOT NULL DEFAULT '',
                     added_at TEXT NOT NULL
                 );
 
@@ -233,6 +237,7 @@ impl Library {
                     disc_number INTEGER NOT NULL DEFAULT 0,
                     rating INTEGER NOT NULL DEFAULT 0,
                     color INTEGER NOT NULL DEFAULT 0,
+                    artwork_path TEXT NOT NULL DEFAULT '',
                     added_at TEXT NOT NULL
                 );
 
@@ -282,18 +287,34 @@ impl Library {
         Ok(())
     }
 
+    /// Add the `artwork_path` column if it doesn't exist yet (v3 → v4 migration).
+    fn migrate_artwork_path(&self) -> rusqlite::Result<()> {
+        let has_artwork_path: bool = self.conn.query_row(
+            "SELECT count(*) > 0 FROM pragma_table_info('tracks') WHERE name='artwork_path'",
+            [],
+            |row| row.get(0),
+        )?;
+        if has_artwork_path {
+            return Ok(());
+        }
+        self.conn.execute_batch(
+            "ALTER TABLE tracks ADD COLUMN artwork_path TEXT NOT NULL DEFAULT '';",
+        )?;
+        Ok(())
+    }
+
     pub fn add_track(&self, track: &Track) -> rusqlite::Result<()> {
         self.conn.execute(
             "INSERT OR IGNORE INTO tracks (
                 id, title, artist, album, genre, composer, label, remixer,
                 key, comment, isrc, lyricist, mix_name, release_date,
                 duration_secs, tempo, year, track_number, disc_number,
-                rating, color, added_at
+                rating, color, artwork_path, added_at
              ) VALUES (
                 ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8,
                 ?9, ?10, ?11, ?12, ?13, ?14,
                 ?15, ?16, ?17, ?18, ?19,
-                ?20, ?21, ?22
+                ?20, ?21, ?22, ?23
              )",
             params![
                 track.id,
@@ -317,6 +338,7 @@ impl Library {
                 track.disc_number,
                 track.rating,
                 track.color,
+                track.artwork_path,
                 track.added_at,
             ],
         )?;
@@ -346,7 +368,7 @@ impl Library {
             "SELECT id, title, artist, album, genre, composer, label, remixer,
                     key, comment, isrc, lyricist, mix_name, release_date,
                     duration_secs, tempo, year, track_number, disc_number,
-                    rating, color, added_at
+                    rating, color, artwork_path, added_at
              FROM tracks ORDER BY artist, album, title",
         )?;
         let tracks: Vec<Track> = track_stmt
@@ -394,8 +416,8 @@ impl Library {
                 comment = ?9, isrc = ?10, lyricist = ?11, mix_name = ?12,
                 release_date = ?13, duration_secs = ?14, tempo = ?15,
                 year = ?16, track_number = ?17, disc_number = ?18,
-                rating = ?19, color = ?20
-             WHERE id = ?21",
+                rating = ?19, color = ?20, artwork_path = ?21
+             WHERE id = ?22",
             params![
                 track.title,
                 track.artist,
@@ -417,6 +439,7 @@ impl Library {
                 track.disc_number,
                 track.rating,
                 track.color,
+                track.artwork_path,
                 track.id,
             ],
         )?;

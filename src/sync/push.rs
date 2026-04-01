@@ -460,6 +460,7 @@ fn copy_to_destination(
             disc_number: item.track.disc_number,
             rating: item.track.rating,
             color: item.track.color,
+            artwork_path: item.track.artwork_path.clone(),
             added_at: today(),
         };
 
