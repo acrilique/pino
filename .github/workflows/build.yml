@@ -88,11 +88,19 @@ jobs:
               env:
                   NO_STRIP: ${{ matrix.no-strip }}
 
+            - name: Save aarch64 DMG
+              if: runner.os == 'macOS'
+              run: cp target/dx/pino/bundle/macos/macos/*.dmg "$RUNNER_TEMP/"
+
             - name: Bundle app for macOS with x86_64 target
               if: runner.os == 'macOS'
               run: dx bundle --release --desktop ${{ matrix.package-types }} --target x86_64-apple-darwin
               env:
                   NO_STRIP: ${{ matrix.no-strip }}
+
+            - name: Restore aarch64 DMG
+              if: runner.os == 'macOS'
+              run: cp "$RUNNER_TEMP/"*aarch64*.dmg target/dx/pino/bundle/macos/macos/
 
             - name: Notarize DMGs
               if: runner.os == 'macOS'
@@ -104,24 +112,15 @@ jobs:
                   API_KEY_PATH="$RUNNER_TEMP/AuthKey.p8"
                   echo "$APPLE_API_KEY_BASE64" | base64 --decode > "$API_KEY_PATH"
 
-                  AARCH_DMG_PATH=$(find target/dx/pino/bundle/macos -name "*aarch64*.dmg" | head -1)
-                  X86_DMG_PATH=$(find target/dx/pino/bundle/macos -name "*x86_64*.dmg" | head -1)
-
-                  xcrun notarytool submit "$AARCH_DMG_PATH" \
-                      --key "$API_KEY_PATH" \
-                      --key-id "$APPLE_API_KEY" \
-                      --issuer "$APPLE_API_ISSUER" \
-                      --wait
-
-                  xcrun stapler staple "$AARCH_DMG_PATH"
-
-                  xcrun notarytool submit "$X86_DMG_PATH" \
-                      --key "$API_KEY_PATH" \
-                      --key-id "$APPLE_API_KEY" \
-                      --issuer "$APPLE_API_ISSUER" \
-                      --wait
-
-                  xcrun stapler staple "$X86_DMG_PATH"
+                  for DMG_PATH in target/dx/pino/bundle/macos/macos/*.dmg; do
+                      echo "Notarizing: $DMG_PATH"
+                      xcrun notarytool submit "$DMG_PATH" \
+                          --key "$API_KEY_PATH" \
+                          --key-id "$APPLE_API_KEY" \
+                          --issuer "$APPLE_API_ISSUER" \
+                          --wait
+                      xcrun stapler staple "$DMG_PATH"
+                  done
 
             - name: Upload artifacts (Linux)
               if: runner.os == 'Linux'
