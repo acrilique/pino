@@ -76,6 +76,10 @@ jobs:
               if: runner.os == 'macOS'
               run: brew install openssl@3
 
+            - name: Install x86_64-apple-darwin toolchain
+              if: runner.os == 'macOS'
+              run: rustup target add x86_64-apple-darwin
+
             - name: Install Dioxus CLI
               run: cargo binstall dioxus-cli --no-confirm
 
@@ -83,9 +87,14 @@ jobs:
               run: dx bundle --release --desktop --package-types "${{ matrix.package-types }}"
               env:
                   NO_STRIP: ${{ matrix.no-strip }}
-                  APPLE_SIGNING_IDENTITY: 'Developer ID Application: Lluc Simó Margalef (BJPC4PHT7X)'
 
-            - name: Notarize DMG
+            - name: Bundle app for macOS with x86_64 target
+              if: runner.os == 'macOS'
+              run: dx bundle --release --desktop --package-types "${{ matrix.package-types }}" --target x86_64-apple-darwin
+              env:
+                  NO_STRIP: ${{ matrix.no-strip }}
+
+            - name: Notarize DMGs
               if: runner.os == 'macOS'
               env:
                   APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
@@ -95,15 +104,24 @@ jobs:
                   API_KEY_PATH="$RUNNER_TEMP/AuthKey.p8"
                   echo "$APPLE_API_KEY_BASE64" | base64 --decode > "$API_KEY_PATH"
 
-                  DMG_PATH=$(find target/dx/pino/bundle/macos -name "*.dmg" | head -1)
+                  AARCH_DMG_PATH=$(find target/dx/pino/bundle/macos -name "*aarch64*.dmg" | head -1)
+                  X86_DMG_PATH=$(find target/dx/pino/bundle/macos -name "*x86_64*.dmg" | head -1)
 
-                  xcrun notarytool submit "$DMG_PATH" \
+                  xcrun notarytool submit "$AARCH_DMG_PATH" \
                       --key "$API_KEY_PATH" \
                       --key-id "$APPLE_API_KEY" \
                       --issuer "$APPLE_API_ISSUER" \
                       --wait
 
-                  xcrun stapler staple "$DMG_PATH"
+                  xcrun stapler staple "$AARCH_DMG_PATH"
+
+                  xcrun notarytool submit "$X86_DMG_PATH" \
+                      --key "$API_KEY_PATH" \
+                      --key-id "$APPLE_API_KEY" \
+                      --issuer "$APPLE_API_ISSUER" \
+                      --wait
+
+                  xcrun stapler staple "$X86_DMG_PATH"
 
             - name: Upload artifacts (Linux)
               if: runner.os == 'Linux'
