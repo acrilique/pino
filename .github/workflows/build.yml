@@ -63,14 +63,7 @@ jobs:
               run: rustc -vV
 
             - name: Install cargo-binstall
-              if: runner.os == 'Windows'
-              shell: pwsh
-              run: Set-ExecutionPolicy Unrestricted -Scope Process; iex (iwr "https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.ps1").Content
-
-            - name: Install cargo-binstall
-              if: runner.os != 'Windows'
-              run: curl -L --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh
-                  | bash
+              uses: cargo-bins/cargo-binstall@0b24824336e2b3800b0f89d9e08b2c08bfa3dcdd
 
             - name: Install OpenSSL
               if: runner.os == 'macOS'
@@ -82,6 +75,8 @@ jobs:
 
             - name: Install Dioxus CLI
               run: cargo binstall dioxus-cli --no-confirm
+              env:
+                  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
             - name: Bundle app
               run: dx bundle --release --desktop ${{ matrix.package-types }}
