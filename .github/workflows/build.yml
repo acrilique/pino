@@ -161,6 +161,6 @@ jobs:
               with:
                   generate_release_notes: true
                   files: |
-                      artifacts/pino-Linux/*
+                      artifacts/pino-Linux/**/*
                       artifacts/pino-Windows/*
                       artifacts/pino-macOS/*
