@@ -389,13 +389,19 @@ fn insert_labels(pdb: &mut Database<File>, label_map: &LabelMap) -> Result<(), S
 
 /// Copy artwork files to PIONEER/Artwork/ on the destination device.
 ///
-/// Each unique `artwork_path` (local cache file) is copied once, using its artwork ID
-/// to build a device-relative path that the PDB will reference.
+/// Each unique `artwork_path` (local cache file) is resized and written twice:
+/// - `{id}.jpg`   — 80×80 thumbnail
+/// - `{id}_m.jpg` — 240×240 medium image
+///
+/// Both files are always JPEG regardless of the source format.
 fn copy_artwork_to_device(
     all: &[TrackWithFiles],
     artwork_map: &ArtworkMap,
     dest_dir: &Path,
 ) -> Result<(), SyncError> {
+    use image::ImageReader;
+    use image::imageops::FilterType;
+
     if artwork_map.is_empty() {
         return Ok(());
     }
@@ -403,7 +409,6 @@ fn copy_artwork_to_device(
     let art_dest = dest_dir.join("PIONEER").join("Artwork");
     std::fs::create_dir_all(&art_dest)?;
 
-    // Collect unique artwork paths that actually exist.
     let mut copied = std::collections::HashSet::new();
     for twf in all {
         let art = &twf.track.artwork_path;
@@ -417,10 +422,33 @@ fn copy_artwork_to_device(
             continue;
         }
 
-        let ext = src.extension().and_then(|e| e.to_str()).unwrap_or("jpg");
+        let reader = match ImageReader::open(src) {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("  Warning: failed to open artwork {art}: {e}");
+                continue;
+            }
+        };
+        let img = match reader.decode() {
+            Ok(i) => i,
+            Err(e) => {
+                eprintln!("  Warning: failed to decode artwork {art}: {e}");
+                continue;
+            }
+        };
+
         let id = artwork_map[art];
-        let dest_name = format!("{id}.{ext}");
-        std::fs::copy(src, art_dest.join(&dest_name))?;
+
+        // 80x80 thumbnail
+        let thumb = img.resize_to_fill(80, 80, FilterType::Lanczos3);
+        thumb.to_rgb8().save(art_dest.join(format!("{id}.jpg")))?;
+
+        // 240x240 medium
+        let medium = img.resize_to_fill(240, 240, FilterType::Lanczos3);
+        medium
+            .to_rgb8()
+            .save(art_dest.join(format!("{id}_m.jpg")))?;
+
         copied.insert(art.clone());
     }
 
@@ -428,15 +456,13 @@ fn copy_artwork_to_device(
 }
 
 /// Insert artwork rows into the PDB, sorted by their assigned IDs.
+///
+/// The PDB path always references the 80×80 thumbnail (`{id}.jpg`).
 fn insert_artworks(pdb: &mut Database<File>, artwork_map: &ArtworkMap) -> Result<(), SyncError> {
     let mut sorted: Vec<_> = artwork_map.iter().collect();
     sorted.sort_by_key(|&(_, &id)| id);
-    for (local_path, &id) in sorted {
-        let ext = std::path::Path::new(local_path)
-            .extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or("jpg");
-        let device_path = format!("/Artwork/{id}.{ext}");
+    for (_, &id) in sorted {
+        let device_path = format!("/Artwork/{id}.jpg");
         let artwork = Artwork::builder().id(id).path(device_path.parse()?).build();
         pdb.add_row(Row::Plain(PlainRow::Artwork(artwork)))?;
     }

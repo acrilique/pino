@@ -17,6 +17,7 @@ rusqlite = { version = "0.39.0", features = ["bundled"] }
 uuid = { version = "1.23.0", features = ["v4"] }
 dirs = "6"
 sha2 = "0.11.0"
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp"] }
 serde = { version = "1", features = ["derive"] }
 toml = "1.1.1"
 open = "5"
