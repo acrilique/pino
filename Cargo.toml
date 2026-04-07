@@ -18,7 +18,7 @@ uuid = { version = "1.23.0", features = ["v4"] }
 dirs = "6"
 sha2 = "0.11.0"
 serde = { version = "1", features = ["derive"] }
-toml = "1.1.1"
+toml = "1.1.2"
 open = "5"
 dioxus-primitives = { git = "https://github.com/DioxusLabs/components", version = "0.0.1", default-features = false }
 
