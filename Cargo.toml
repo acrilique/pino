@@ -10,7 +10,7 @@ edition = "2024"
 rekordcrate = { git = "https://github.com/acrilique/rekordcrate", branch = "create-db" }
 lofty = "0.23.3"
 chrono = "0.4.44"
-dioxus = { version = "0.7.4", features = ["desktop"] }
+dioxus = { version = "0.7.5", features = ["desktop"] }
 rfd = "0.17.2"
 tokio = { version = "1", features = ["sync"] }
 rusqlite = { version = "0.39.0", features = ["bundled"] }
@@ -19,7 +19,7 @@ dirs = "6"
 sha2 = "0.11.0"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp"] }
 serde = { version = "1", features = ["derive"] }
-toml = "1.1.1"
+toml = "1.1.2"
 open = "5"
 dioxus-primitives = { git = "https://github.com/DioxusLabs/components", version = "0.0.1", default-features = false }
 
