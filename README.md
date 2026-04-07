@@ -19,7 +19,7 @@ FFmpeg is required for audio format conversion. Please find out how to install i
 
 ### Option A: Pre-built binaries
 
-You can download pre-built binaries of the app from the [releases page](https://github.com/acrilique/pino/releases).
+You can download pre-built binaries of the app from the [releases page](https://github.com/acrilique/pino/releases). They should work well for Windows and MacOS. For Linux, please build the app from source.
 
 ### Option B: Building from source
 
