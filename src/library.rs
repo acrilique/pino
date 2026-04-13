@@ -122,14 +122,6 @@ impl Library {
             Ok(entities.iter().map(|e| e.hdr.uid.to_string()).collect())
         })
     }
-
-    /// Check whether a media source with this content path exists.
-    pub fn has_content_path(&self, path: &str) -> Result<bool> {
-        let tracks = self.all_tracks()?;
-        Ok(tracks
-            .iter()
-            .any(|t| t.files.iter().any(|f| f.file_path == path)))
-    }
 }
 
 // ── Write operations ─────────────────────────────────────────────
@@ -179,28 +171,30 @@ impl Library {
 
     /// Delete a track by its entity UID.
     pub fn delete_track(&self, entity_uid_str: &str) -> Result<()> {
-        // Load the track to find its content path, then purge by content path.
         let entity_uid = entity_uid_str
             .parse()
             .map_err(|_| anyhow!("invalid entity uid: {entity_uid_str}"))?;
 
-        self.rt.block_on(async {
+        // Load the content path first (in its own block_on), then delete outside it
+        // to avoid nested block_on on a current_thread runtime.
+        let content_path = self.rt.block_on(async {
             let entity = backend_embedded::track::load_one(self.env.db_gatekeeper(), entity_uid)
                 .await
                 .context("load track for deletion")?;
+            Ok::<String, anyhow::Error>(
+                entity
+                    .body
+                    .track
+                    .media_source
+                    .content
+                    .link
+                    .path
+                    .as_str()
+                    .to_owned(),
+            )
+        })?;
 
-            let content_path = entity
-                .body
-                .track
-                .media_source
-                .content
-                .link
-                .path
-                .as_str()
-                .to_owned();
-
-            self.delete_track_by_path(&content_path)
-        })
+        self.delete_track_by_path(&content_path)
     }
 
     /// Delete a track by its media source content path.
@@ -240,17 +234,25 @@ impl Library {
             util::guess_mime_from_file_path,
         };
         use aoide::util::clock::OffsetDateTimeMs;
+        use std::collections::HashSet;
         use std::io::BufReader;
 
         let config = ImportTrackConfig::default();
-        let mut imported = 0u32;
         let mut warnings = Vec::new();
+
+        // Load all existing content paths once to avoid O(n) full-table scans.
+        let existing_paths: HashSet<String> = self
+            .all_tracks()?
+            .into_iter()
+            .flat_map(|t| t.files.into_iter().map(|f| f.file_path))
+            .collect();
+
+        let mut validated_batch = Vec::new();
 
         for path in paths {
             let path_str = path.to_string_lossy().to_string();
 
-            // Skip if already in collection.
-            if self.has_content_path(&path_str).unwrap_or(false) {
+            if existing_paths.contains(&path_str) {
                 continue;
             }
 
@@ -300,33 +302,87 @@ impl Library {
                 continue;
             }
 
-            // Validate and store.
+            // Validate; skip this file on failure rather than aborting the whole batch.
+            match aoide::usecases::track::validate_input(track) {
+                Ok((validated, _)) => validated_batch.push(validated),
+                Err(e) => {
+                    warnings.push(format!("{path_str}: validation failed ({e:?})"));
+                }
+            }
+        }
+
+        if validated_batch.is_empty() {
+            return Ok((0, warnings));
+        }
+
+        let n = u32::try_from(validated_batch.len()).unwrap_or(u32::MAX);
+
+        let params = aoide::usecases::track::replace::Params {
+            mode: aoide::repo::track::ReplaceMode::UpdateOrCreate,
+            resolve_path_from_url: false,
+            preserve_collected_at: true,
+            update_last_synchronized_rev: true,
+            decode_gigtags: false,
+        };
+
+        // One batch call for all validated tracks.
+        self.rt.block_on(async {
+            backend_embedded::track::replace_many_by_media_source_content_path(
+                self.env.db_gatekeeper(),
+                self.collection_uid.clone(),
+                params,
+                validated_batch.into_iter(),
+            )
+            .await
+            .context("batch store imported tracks")
+        })?;
+
+        Ok((n, warnings))
+    }
+
+    /// Overwrite all metadata fields of an existing track from a [`TrackView`].
+    ///
+    /// Loads the entity once, applies every field, validates, and writes back in one operation.
+    pub fn overwrite_track_fields(
+        &self,
+        entity_uid_str: &str,
+        view: &crate::bridge::TrackView,
+    ) -> Result<()> {
+        let entity_uid = entity_uid_str
+            .parse()
+            .map_err(|_| anyhow!("invalid entity uid: {entity_uid_str}"))?;
+
+        self.rt.block_on(async {
+            let mut entity =
+                backend_embedded::track::load_one(self.env.db_gatekeeper(), entity_uid)
+                    .await
+                    .context("load track for overwrite")?;
+
+            crate::bridge::apply_all_fields(&mut entity, view);
+
+            let track = entity.body.track.clone();
             let (validated, _invalidities) = aoide::usecases::track::validate_input(track)
-                .map_err(|e| anyhow!("validation failed for {path_str}: {e:?}"))?;
+                .map_err(|e| anyhow!("validation failed: {e:?}"))?;
 
             let params = aoide::usecases::track::replace::Params {
-                mode: aoide::repo::track::ReplaceMode::UpdateOrCreate,
+                mode: aoide::repo::track::ReplaceMode::UpdateOnly,
                 resolve_path_from_url: false,
                 preserve_collected_at: true,
-                update_last_synchronized_rev: true,
+                update_last_synchronized_rev: false,
                 decode_gigtags: false,
             };
 
-            self.rt.block_on(async {
-                backend_embedded::track::replace_many_by_media_source_content_path(
-                    self.env.db_gatekeeper(),
-                    self.collection_uid.clone(),
-                    params,
-                    std::iter::once(validated),
-                )
-                .await
-                .context("store imported track")
-            })?;
+            backend_embedded::track::replace_many_by_media_source_content_path(
+                self.env.db_gatekeeper(),
+                self.collection_uid.clone(),
+                params,
+                std::iter::once(validated),
+            )
+            .await
+            .context("replace track after overwrite")?;
 
-            imported += 1;
-        }
-
-        Ok((imported, warnings))
+            Ok(())
+        })
     }
 }
 

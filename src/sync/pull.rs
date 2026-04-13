@@ -63,17 +63,25 @@ pub fn pull_from_remote(
         // Copy each file from USB to the local imported directory, then import.
         let mut any_file_ok = false;
         for file_view in &tv.files {
-            let src = contents_dir.join(&file_view.file_path);
+            // file_view.file_path is an absolute path on the remote; extract just the
+            // filename so that join(import_dir, filename) works correctly.
+            let Some(filename) = Path::new(&file_view.file_path).file_name() else {
+                warnings.push(format!("Invalid path on device: {}", file_view.file_path));
+                continue;
+            };
+            let src = contents_dir.join(filename);
             if !src.exists() {
-                warnings.push(format!("File not found on device: {}", file_view.file_path));
+                warnings.push(format!("File not found on device: {}", src.display()));
                 continue;
             }
 
-            let dest = import_dir.join(&file_view.file_path);
-            let dest = if dest.exists() {
-                unique_path(&dest)
-            } else {
-                dest
+            let dest = {
+                let candidate = import_dir.join(filename);
+                if candidate.exists() {
+                    unique_path(&candidate)
+                } else {
+                    candidate
+                }
             };
 
             if let Err(e) = std::fs::copy(&src, &dest) {

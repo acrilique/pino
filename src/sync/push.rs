@@ -97,14 +97,15 @@ pub fn sync(
     std::fs::create_dir_all(&contents_dir)?;
 
     let local_tracks = lib.all_tracks()?;
-    let remote_ids: HashSet<String> = remote_lib.track_ids()?.into_iter().collect();
+    let remote_tracks = remote_lib.all_tracks()?;
+    let remote_ids: HashSet<String> = remote_tracks.iter().map(|t| t.id.clone()).collect();
 
     let to_sync: Vec<&TrackView> = local_tracks
         .iter()
         .filter(|t| !remote_ids.contains(&t.id))
         .collect();
 
-    let updated = update_remote_metadata(&local_tracks, &remote_lib)?;
+    let updated = update_remote_metadata(&local_tracks, &remote_lib, &remote_tracks)?;
 
     if to_sync.is_empty() {
         pdb::generate_pdb(&remote_lib, dest_dir)?;
@@ -117,11 +118,16 @@ pub fn sync(
         });
     }
 
-    let remote_tracks = remote_lib.all_tracks()?;
+    // Seed dedup map with just the bare filenames already on the remote.
     let mut used_filenames: HashMap<String, u32> = remote_tracks
         .iter()
-        .flat_map(|tv| tv.files.iter().map(|f| f.file_path.clone()))
-        .map(|name| (name, 1))
+        .flat_map(|tv| tv.files.iter())
+        .filter_map(|f| {
+            Path::new(&f.file_path)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .map(|name| (name.to_owned(), 1u32))
+        })
         .collect();
     let conv_dir = converted_dir();
     std::fs::create_dir_all(&conv_dir)?;
@@ -163,8 +169,8 @@ pub fn sync(
 fn update_remote_metadata(
     local_tracks: &[TrackView],
     remote_lib: &Library,
+    remote_tracks: &[TrackView],
 ) -> Result<u32, SyncError> {
-    let remote_tracks = remote_lib.all_tracks()?;
     let remote_by_id: HashMap<&str, &TrackView> = remote_tracks
         .iter()
         .map(|tv| (tv.id.as_str(), tv))
@@ -173,33 +179,36 @@ fn update_remote_metadata(
     let mut updated = 0u32;
     for local in local_tracks {
         if let Some(remote) = remote_by_id.get(local.id.as_str())
-            && (local.title != remote.title
-                || local.artist != remote.artist
-                || local.album != remote.album
-                || local.genre != remote.genre
-                || local.composer != remote.composer
-                || local.label != remote.label
-                || local.remixer != remote.remixer
-                || local.key != remote.key
-                || local.comment != remote.comment
-                || local.isrc != remote.isrc
-                || local.lyricist != remote.lyricist
-                || local.mix_name != remote.mix_name
-                || local.release_date != remote.release_date
-                || local.tempo != remote.tempo
-                || local.year != remote.year
-                || local.track_number != remote.track_number
-                || local.disc_number != remote.disc_number
-                || local.rating != remote.rating
-                || local.color != remote.color)
+            && metadata_differs(local, remote)
         {
-            // Update each changed field on the remote.
-            // For simplicity, re-import the track's source file into the remote lib.
-            // TODO: Use a more targeted field-by-field update approach.
+            remote_lib.overwrite_track_fields(&local.id, local)?;
             updated += 1;
         }
     }
     Ok(updated)
+}
+
+/// Return `true` if any metadata field differs between `local` and `remote`.
+fn metadata_differs(local: &TrackView, remote: &TrackView) -> bool {
+    local.title != remote.title
+        || local.artist != remote.artist
+        || local.album != remote.album
+        || local.genre != remote.genre
+        || local.composer != remote.composer
+        || local.label != remote.label
+        || local.remixer != remote.remixer
+        || local.key != remote.key
+        || local.comment != remote.comment
+        || local.isrc != remote.isrc
+        || local.lyricist != remote.lyricist
+        || local.mix_name != remote.mix_name
+        || local.release_date != remote.release_date
+        || local.tempo != remote.tempo
+        || local.year != remote.year
+        || local.track_number != remote.track_number
+        || local.disc_number != remote.disc_number
+        || local.rating != remote.rating
+        || local.color != remote.color
 }
 
 /// For each track to sync, pick the best source file, assign a destination filename,

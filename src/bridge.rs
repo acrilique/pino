@@ -153,8 +153,9 @@ pub fn flatten(entity: &Entity) -> TrackView {
         added_at,
         files: vec![TrackFileView {
             format: format_from_path(file_path),
+            file_size: std::fs::metadata(file_path)
+                .map_or(0, |m| m.len().try_into().unwrap_or(u32::MAX)),
             file_path: file_path.to_owned(),
-            file_size: 0, // Not tracked by aoide; populate from filesystem
             sample_rate: audio.sample_rate.map_or(0, |sr| sr.value() as u32),
             bitrate: audio.bitrate.map_or(0, |br| br.value() as u32),
         }],
@@ -310,6 +311,31 @@ fn set_sub_title(track: &mut track::Track, name: String) {
         });
     }
     track.titles = titles.canonicalize_into();
+}
+
+/// Apply every field from a [`TrackView`] to the track inside an entity.
+///
+/// Used when overwriting metadata on the remote library from a local [`TrackView`].
+pub fn apply_all_fields(entity: &mut Entity, view: &TrackView) {
+    apply_edit(entity, TrackField::Title(view.title.clone()));
+    apply_edit(entity, TrackField::Artist(view.artist.clone()));
+    apply_edit(entity, TrackField::Album(view.album.clone()));
+    apply_edit(entity, TrackField::Genre(view.genre.clone()));
+    apply_edit(entity, TrackField::Composer(view.composer.clone()));
+    apply_edit(entity, TrackField::Label(view.label.clone()));
+    apply_edit(entity, TrackField::Remixer(view.remixer.clone()));
+    apply_edit(entity, TrackField::Key(view.key.clone()));
+    apply_edit(entity, TrackField::Comment(view.comment.clone()));
+    apply_edit(entity, TrackField::Isrc(view.isrc.clone()));
+    apply_edit(entity, TrackField::Lyricist(view.lyricist.clone()));
+    apply_edit(entity, TrackField::MixName(view.mix_name.clone()));
+    apply_edit(entity, TrackField::ReleaseDate(view.release_date.clone()));
+    apply_edit(entity, TrackField::Tempo(view.tempo));
+    apply_edit(entity, TrackField::Year(view.year));
+    apply_edit(entity, TrackField::TrackNumber(view.track_number));
+    apply_edit(entity, TrackField::DiscNumber(view.disc_number));
+    apply_edit(entity, TrackField::Rating(view.rating));
+    apply_edit(entity, TrackField::Color(view.color));
 }
 
 /// Parse a string into `DateOrDateTime`, trying year-only and full date formats.
