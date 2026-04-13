@@ -1,10 +1,11 @@
 // Copyright (c) 2026 Lluc Simó Margalef <lluc.simo@protonmail.com>
 //
-// This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0. If a copy
-// of the MPL was not distributed with this file, You can obtain one at
-// http://mozilla.org/MPL/2.0/.
+// This program is free software: you can redistribute it and/or modify it under
+// the terms of the GNU Affero General Public License as published by the Free
+// Software Foundation, either version 3 of the License, or (at your option) any
+// later version.
 //
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 use crate::paths;
 use serde::{Deserialize, Serialize};

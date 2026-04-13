@@ -3,7 +3,7 @@ name = "pino"
 version = "0.2.3"
 authors = ["Lluc Simó Margalef <lluc.simo@protonmail.com>"]
 description = "Experimental app to export audio files generating a Pioneer-compatible USB drive"
-license = "MPL-2.0"
+license = "AGPL-3.0-or-later"
 edition = "2024"
 
 [dependencies]
