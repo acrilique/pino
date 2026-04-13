@@ -213,7 +213,7 @@ pub(crate) fn converted_dir() -> PathBuf {
 }
 
 pub(crate) fn remote_db_dir(dest_dir: &Path) -> PathBuf {
-    dest_dir.join("PIONEER").join("pino")
+    dest_dir.join("pino")
 }
 
 pub(crate) fn open_remote_library(dest_dir: &Path) -> Result<Option<Library>, SyncError> {
