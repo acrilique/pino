@@ -8,8 +8,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 use super::{SyncError, today};
-use crate::db::{Library, TrackWithFiles};
+use crate::bridge::TrackView;
 use crate::format::SupportedFormat;
+use crate::library::Library;
 use rekordcrate::pdb::io::Database;
 use rekordcrate::pdb::string::DeviceSQLString;
 use rekordcrate::pdb::{
@@ -38,8 +39,10 @@ struct IdMaps {
 }
 
 /// Generate a Pioneer PDB database from all tracks in the given library.
-pub(super) fn generate_pdb(db: &Library, dest_dir: &Path) -> Result<(), SyncError> {
-    let all = db.get_all_tracks_with_files()?;
+pub(super) fn generate_pdb(lib: &Library, dest_dir: &Path) -> Result<(), SyncError> {
+    let all = lib
+        .all_tracks()
+        .map_err(|e| SyncError::Other(e.to_string()))?;
 
     if all.is_empty() {
         return Ok(());
@@ -95,7 +98,7 @@ pub(super) fn generate_pdb(db: &Library, dest_dir: &Path) -> Result<(), SyncErro
 /// Build sequential ID maps for artists, albums, genres, keys, and labels from the track list.
 ///
 /// Composers and remixers are inserted into the artist map (they get their own artist IDs).
-fn build_id_maps(all: &[TrackWithFiles]) -> IdMaps {
+fn build_id_maps(all: &[TrackView]) -> IdMaps {
     let mut artist_map: ArtistMap = HashMap::new();
     let mut next_artist_id: u32 = 1;
     let mut album_map: AlbumMap = HashMap::new();
@@ -109,62 +112,52 @@ fn build_id_maps(all: &[TrackWithFiles]) -> IdMaps {
     let mut artwork_map: ArtworkMap = HashMap::new();
     let mut next_artwork_id: u32 = 1;
 
-    for twf in all {
-        let track = &twf.track;
-
-        // Artist
-        if !track.artist.is_empty() && !artist_map.contains_key(&track.artist) {
-            artist_map.insert(track.artist.clone(), next_artist_id);
+    for tv in all {
+        if !tv.artist.is_empty() && !artist_map.contains_key(&tv.artist) {
+            artist_map.insert(tv.artist.clone(), next_artist_id);
             next_artist_id += 1;
         }
 
-        // Composer (stored in the Artist table with its own ID)
-        if !track.composer.is_empty() && !artist_map.contains_key(&track.composer) {
-            artist_map.insert(track.composer.clone(), next_artist_id);
+        if !tv.composer.is_empty() && !artist_map.contains_key(&tv.composer) {
+            artist_map.insert(tv.composer.clone(), next_artist_id);
             next_artist_id += 1;
         }
 
-        // Remixer (stored in the Artist table with its own ID)
-        if !track.remixer.is_empty() && !artist_map.contains_key(&track.remixer) {
-            artist_map.insert(track.remixer.clone(), next_artist_id);
+        if !tv.remixer.is_empty() && !artist_map.contains_key(&tv.remixer) {
+            artist_map.insert(tv.remixer.clone(), next_artist_id);
             next_artist_id += 1;
         }
 
-        // Album
-        if !track.album.is_empty() {
-            let artist_id = if track.artist.is_empty() {
+        if !tv.album.is_empty() {
+            let artist_id = if tv.artist.is_empty() {
                 0
             } else {
-                artist_map[&track.artist]
+                artist_map[&tv.artist]
             };
-            let key = (track.album.clone(), artist_id);
+            let key = (tv.album.clone(), artist_id);
             if let std::collections::hash_map::Entry::Vacant(entry) = album_map.entry(key) {
                 entry.insert(next_album_id);
                 next_album_id += 1;
             }
         }
 
-        // Genre
-        if !track.genre.is_empty() && !genre_map.contains_key(&track.genre) {
-            genre_map.insert(track.genre.clone(), next_genre_id);
+        if !tv.genre.is_empty() && !genre_map.contains_key(&tv.genre) {
+            genre_map.insert(tv.genre.clone(), next_genre_id);
             next_genre_id += 1;
         }
 
-        // Key
-        if !track.key.is_empty() && !key_map.contains_key(&track.key) {
-            key_map.insert(track.key.clone(), next_key_id);
+        if !tv.key.is_empty() && !key_map.contains_key(&tv.key) {
+            key_map.insert(tv.key.clone(), next_key_id);
             next_key_id += 1;
         }
 
-        // Label
-        if !track.label.is_empty() && !label_map.contains_key(&track.label) {
-            label_map.insert(track.label.clone(), next_label_id);
+        if !tv.label.is_empty() && !label_map.contains_key(&tv.label) {
+            label_map.insert(tv.label.clone(), next_label_id);
             next_label_id += 1;
         }
 
-        // Artwork (keyed by local artwork_path which is a content-hash filename)
-        if !track.artwork_path.is_empty() && !artwork_map.contains_key(&track.artwork_path) {
-            artwork_map.insert(track.artwork_path.clone(), next_artwork_id);
+        if !tv.artwork_path.is_empty() && !artwork_map.contains_key(&tv.artwork_path) {
+            artwork_map.insert(tv.artwork_path.clone(), next_artwork_id);
             next_artwork_id += 1;
         }
     }
@@ -216,58 +209,57 @@ fn create_pdb(rekordbox_dir: &Path) -> Result<Database<File>, SyncError> {
 /// Insert track rows into the PDB, returning the number of successfully exported tracks.
 fn insert_tracks(
     pdb: &mut Database<File>,
-    all: &[TrackWithFiles],
+    all: &[TrackView],
     maps: &IdMaps,
     today: &str,
 ) -> Result<u32, SyncError> {
     let mut exported_count: u32 = 0;
 
-    for twf in all {
-        let track = &twf.track;
-        let Some(file) = twf.files.first() else {
+    for tv in all {
+        let Some(file) = tv.files.first() else {
             continue;
         };
 
         let track_id = exported_count + 1;
-        let artist_id = if track.artist.is_empty() {
+        let artist_id = if tv.artist.is_empty() {
             0
         } else {
-            maps.artists[&track.artist]
+            maps.artists[&tv.artist]
         };
-        let album_id = if track.album.is_empty() {
+        let album_id = if tv.album.is_empty() {
             0
         } else {
-            maps.albums[&(track.album.clone(), artist_id)]
+            maps.albums[&(tv.album.clone(), artist_id)]
         };
-        let genre_id = if track.genre.is_empty() {
+        let genre_id = if tv.genre.is_empty() {
             0
         } else {
-            maps.genres[&track.genre]
+            maps.genres[&tv.genre]
         };
-        let key_id = if track.key.is_empty() {
+        let key_id = if tv.key.is_empty() {
             0
         } else {
-            maps.keys[&track.key]
+            maps.keys[&tv.key]
         };
-        let label_id = if track.label.is_empty() {
+        let label_id = if tv.label.is_empty() {
             0
         } else {
-            maps.labels[&track.label]
+            maps.labels[&tv.label]
         };
-        let composer_id = if track.composer.is_empty() {
+        let composer_id = if tv.composer.is_empty() {
             0
         } else {
-            maps.artists[&track.composer]
+            maps.artists[&tv.composer]
         };
-        let remixer_id = if track.remixer.is_empty() {
+        let remixer_id = if tv.remixer.is_empty() {
             0
         } else {
-            maps.artists[&track.remixer]
+            maps.artists[&tv.remixer]
         };
-        let artwork_id = if track.artwork_path.is_empty() {
+        let artwork_id = if tv.artwork_path.is_empty() {
             0
         } else {
-            maps.artworks[&track.artwork_path]
+            maps.artworks[&tv.artwork_path]
         };
 
         let pioneer_path = format!("/Contents/{}", file.file_path);
@@ -282,7 +274,7 @@ fn insert_tracks(
 
         let pdb_track = rekordcrate::pdb::Track::builder()
             .id(track_id)
-            .title(track.title.parse()?)
+            .title(tv.title.parse()?)
             .artist_id(artist_id)
             .album_id(album_id)
             .genre_id(genre_id)
@@ -296,20 +288,20 @@ fn insert_tracks(
             .sample_rate(file.sample_rate)
             .sample_depth(16)
             .bitrate(file.bitrate)
-            .duration(track.duration_secs)
+            .duration(tv.duration_secs)
             .file_size(file.file_size)
             .file_type(file_type.into())
-            .tempo(track.tempo)
-            .year(track.year)
-            .track_number(track.track_number)
-            .disc_number(track.disc_number)
-            .rating(track.rating)
-            .color(color_index_from_u8(track.color))
-            .comment(track.comment.parse()?)
-            .isrc(track.isrc.parse()?)
-            .lyricist(track.lyricist.parse()?)
-            .mix_name(track.mix_name.parse()?)
-            .release_date(track.release_date.parse()?)
+            .tempo(tv.tempo)
+            .year(tv.year)
+            .track_number(tv.track_number)
+            .disc_number(tv.disc_number)
+            .rating(tv.rating)
+            .color(color_index_from_u8(tv.color))
+            .comment(tv.comment.parse()?)
+            .isrc(tv.isrc.parse()?)
+            .lyricist(tv.lyricist.parse()?)
+            .mix_name(tv.mix_name.parse()?)
+            .release_date(tv.release_date.parse()?)
             .autoload_hotcues("ON".parse()?)
             .date_added(today.parse()?)
             .build();
@@ -396,7 +388,7 @@ fn insert_labels(pdb: &mut Database<File>, label_map: &LabelMap) -> Result<(), S
 ///
 /// Both files are always JPEG regardless of the source format.
 fn copy_artwork_to_device(
-    all: &[TrackWithFiles],
+    all: &[TrackView],
     artwork_map: &ArtworkMap,
     dest_dir: &Path,
 ) -> Result<(), SyncError> {
@@ -411,8 +403,8 @@ fn copy_artwork_to_device(
     std::fs::create_dir_all(&art_dest)?;
 
     let mut copied = std::collections::HashSet::new();
-    for twf in all {
-        let art = &twf.track.artwork_path;
+    for tv in all {
+        let art = &tv.artwork_path;
         if art.is_empty() || copied.contains(art) {
             continue;
         }
@@ -470,8 +462,7 @@ fn insert_artworks(pdb: &mut Database<File>, artwork_map: &ArtworkMap) -> Result
     Ok(())
 }
 
-/// Map a `u8` color value to a [`ColorIndex`]. This assumes the default colors in rekordbox,
-/// which are the same ones provided by `rekordcrate::defaults`.
+/// Map a `u8` color value to a [`ColorIndex`].
 fn color_index_from_u8(value: u8) -> ColorIndex {
     match value {
         1 => ColorIndex::Pink,

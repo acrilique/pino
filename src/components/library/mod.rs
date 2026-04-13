@@ -13,10 +13,13 @@ mod rating_cell;
 mod sortable_header;
 
 use std::collections::HashSet;
+use std::sync::Arc;
 
+use crate::bridge::{self, TrackField};
+use crate::library::Library as Lib;
 use crate::prefs::{self, Column, SortKey, SortOrder};
-use crate::task::{db_op, spawn_blocking};
-use crate::{db, paths, sync};
+use crate::sync;
+use crate::task::spawn_blocking;
 use dioxus::prelude::*;
 
 use color_cell::ColorCell;
@@ -25,10 +28,11 @@ use editable_cell::EditableCell;
 use rating_cell::RatingCell;
 use sortable_header::SortableHeader;
 
-pub fn refresh_tracks(tracks: &mut Signal<Vec<db::TrackWithFiles>>) {
+pub fn refresh_tracks(tracks: &mut Signal<Vec<bridge::TrackView>>) {
+    let lib = dioxus::prelude::consume_context::<Arc<Lib>>();
     let mut tracks = *tracks;
     spawn(async move {
-        let t = db_op(db::Library::get_all_tracks_with_files)
+        let t = spawn_blocking(move || lib.all_tracks().unwrap_or_default())
             .await
             .unwrap_or_default();
         tracks.set(t);
@@ -52,7 +56,7 @@ struct ContextMenu {
 enum ContextTarget {
     Header,
     File {
-        file_id: String,
+        file_path: String,
         track_id: String,
         format: String,
     },
@@ -63,7 +67,7 @@ enum ContextTarget {
 
 #[component]
 pub fn Library(
-    mut tracks: Signal<Vec<db::TrackWithFiles>>,
+    mut tracks: Signal<Vec<bridge::TrackView>>,
     mut scanning: Signal<bool>,
     sort_key: Signal<SortKey>,
     sort_order: Signal<SortOrder>,
@@ -83,67 +87,27 @@ pub fn Library(
         let order = sort_order();
         list.sort_by(|a, b| {
             let cmp = match key {
-                SortKey::Title => a
-                    .track
-                    .title
-                    .to_lowercase()
-                    .cmp(&b.track.title.to_lowercase()),
-                SortKey::Artist => a
-                    .track
-                    .artist
-                    .to_lowercase()
-                    .cmp(&b.track.artist.to_lowercase()),
-                SortKey::Album => a
-                    .track
-                    .album
-                    .to_lowercase()
-                    .cmp(&b.track.album.to_lowercase()),
-                SortKey::Duration => a.track.duration_secs.cmp(&b.track.duration_secs),
-                SortKey::Genre => a
-                    .track
-                    .genre
-                    .to_lowercase()
-                    .cmp(&b.track.genre.to_lowercase()),
-                SortKey::Composer => a
-                    .track
-                    .composer
-                    .to_lowercase()
-                    .cmp(&b.track.composer.to_lowercase()),
-                SortKey::Label => a
-                    .track
-                    .label
-                    .to_lowercase()
-                    .cmp(&b.track.label.to_lowercase()),
-                SortKey::Remixer => a
-                    .track
-                    .remixer
-                    .to_lowercase()
-                    .cmp(&b.track.remixer.to_lowercase()),
-                SortKey::Key => a.track.key.to_lowercase().cmp(&b.track.key.to_lowercase()),
-                SortKey::Comment => a
-                    .track
-                    .comment
-                    .to_lowercase()
-                    .cmp(&b.track.comment.to_lowercase()),
-                SortKey::Isrc => a.track.isrc.cmp(&b.track.isrc),
-                SortKey::Lyricist => a
-                    .track
-                    .lyricist
-                    .to_lowercase()
-                    .cmp(&b.track.lyricist.to_lowercase()),
-                SortKey::MixName => a
-                    .track
-                    .mix_name
-                    .to_lowercase()
-                    .cmp(&b.track.mix_name.to_lowercase()),
-                SortKey::ReleaseDate => a.track.release_date.cmp(&b.track.release_date),
-                SortKey::Bpm => a.track.tempo.cmp(&b.track.tempo),
-                SortKey::Year => a.track.year.cmp(&b.track.year),
-                SortKey::TrackNumber => a.track.track_number.cmp(&b.track.track_number),
-                SortKey::DiscNumber => a.track.disc_number.cmp(&b.track.disc_number),
-                SortKey::Rating => a.track.rating.cmp(&b.track.rating),
-                SortKey::Color => a.track.color.cmp(&b.track.color),
-                SortKey::AddedAt => a.track.added_at.cmp(&b.track.added_at),
+                SortKey::Title => a.title.to_lowercase().cmp(&b.title.to_lowercase()),
+                SortKey::Artist => a.artist.to_lowercase().cmp(&b.artist.to_lowercase()),
+                SortKey::Album => a.album.to_lowercase().cmp(&b.album.to_lowercase()),
+                SortKey::Duration => a.duration_secs.cmp(&b.duration_secs),
+                SortKey::Genre => a.genre.to_lowercase().cmp(&b.genre.to_lowercase()),
+                SortKey::Composer => a.composer.to_lowercase().cmp(&b.composer.to_lowercase()),
+                SortKey::Label => a.label.to_lowercase().cmp(&b.label.to_lowercase()),
+                SortKey::Remixer => a.remixer.to_lowercase().cmp(&b.remixer.to_lowercase()),
+                SortKey::Key => a.key.to_lowercase().cmp(&b.key.to_lowercase()),
+                SortKey::Comment => a.comment.to_lowercase().cmp(&b.comment.to_lowercase()),
+                SortKey::Isrc => a.isrc.cmp(&b.isrc),
+                SortKey::Lyricist => a.lyricist.to_lowercase().cmp(&b.lyricist.to_lowercase()),
+                SortKey::MixName => a.mix_name.to_lowercase().cmp(&b.mix_name.to_lowercase()),
+                SortKey::ReleaseDate => a.release_date.cmp(&b.release_date),
+                SortKey::Bpm => a.tempo.cmp(&b.tempo),
+                SortKey::Year => a.year.cmp(&b.year),
+                SortKey::TrackNumber => a.track_number.cmp(&b.track_number),
+                SortKey::DiscNumber => a.disc_number.cmp(&b.disc_number),
+                SortKey::Rating => a.rating.cmp(&b.rating),
+                SortKey::Color => a.color.cmp(&b.color),
+                SortKey::AddedAt => a.added_at.cmp(&b.added_at),
             };
             match order {
                 SortOrder::Asc => cmp,
@@ -161,41 +125,63 @@ pub fn Library(
         let new_val = edit_value().trim().to_string();
 
         let mut w = tracks.write();
-        if let Some(twf) = w.iter_mut().find(|t| t.track.id == track_id) {
+        if let Some(twf) = w.iter_mut().find(|t| t.id == track_id) {
             match col {
-                EditColumn::Title => twf.track.title.clone_from(&new_val),
-                EditColumn::Artist => twf.track.artist.clone_from(&new_val),
-                EditColumn::Album => twf.track.album.clone_from(&new_val),
-                EditColumn::Genre => twf.track.genre.clone_from(&new_val),
-                EditColumn::Composer => twf.track.composer.clone_from(&new_val),
-                EditColumn::Label => twf.track.label.clone_from(&new_val),
-                EditColumn::Remixer => twf.track.remixer.clone_from(&new_val),
-                EditColumn::Key => twf.track.key.clone_from(&new_val),
-                EditColumn::Comment => twf.track.comment.clone_from(&new_val),
-                EditColumn::Isrc => twf.track.isrc.clone_from(&new_val),
-                EditColumn::Lyricist => twf.track.lyricist.clone_from(&new_val),
-                EditColumn::MixName => twf.track.mix_name.clone_from(&new_val),
-                EditColumn::ReleaseDate => twf.track.release_date.clone_from(&new_val),
+                EditColumn::Title => twf.title.clone_from(&new_val),
+                EditColumn::Artist => twf.artist.clone_from(&new_val),
+                EditColumn::Album => twf.album.clone_from(&new_val),
+                EditColumn::Genre => twf.genre.clone_from(&new_val),
+                EditColumn::Composer => twf.composer.clone_from(&new_val),
+                EditColumn::Label => twf.label.clone_from(&new_val),
+                EditColumn::Remixer => twf.remixer.clone_from(&new_val),
+                EditColumn::Key => twf.key.clone_from(&new_val),
+                EditColumn::Comment => twf.comment.clone_from(&new_val),
+                EditColumn::Isrc => twf.isrc.clone_from(&new_val),
+                EditColumn::Lyricist => twf.lyricist.clone_from(&new_val),
+                EditColumn::MixName => twf.mix_name.clone_from(&new_val),
+                EditColumn::ReleaseDate => twf.release_date.clone_from(&new_val),
                 EditColumn::Bpm => {
-                    twf.track.tempo = new_val.parse().unwrap_or(twf.track.tempo);
+                    twf.tempo = new_val.parse().unwrap_or(twf.tempo);
                 }
                 EditColumn::Year => {
-                    twf.track.year = new_val.parse().unwrap_or(twf.track.year);
+                    twf.year = new_val.parse().unwrap_or(twf.year);
                 }
                 EditColumn::TrackNumber => {
-                    twf.track.track_number = new_val.parse().unwrap_or(twf.track.track_number);
+                    twf.track_number = new_val.parse().unwrap_or(twf.track_number);
                 }
                 EditColumn::DiscNumber => {
-                    twf.track.disc_number = new_val.parse().unwrap_or(twf.track.disc_number);
+                    twf.disc_number = new_val.parse().unwrap_or(twf.disc_number);
                 }
-                EditColumn::AddedAt => twf.track.added_at.clone_from(&new_val),
+                EditColumn::AddedAt => twf.added_at.clone_from(&new_val),
             }
-            let track = twf.track.clone();
+            let track_uid = twf.id.clone();
             drop(w);
 
-            let scroll_id = track.id.clone();
+            let field = match col {
+                EditColumn::Title => TrackField::Title(new_val.clone()),
+                EditColumn::Artist => TrackField::Artist(new_val.clone()),
+                EditColumn::Album => TrackField::Album(new_val.clone()),
+                EditColumn::Genre => TrackField::Genre(new_val.clone()),
+                EditColumn::Composer => TrackField::Composer(new_val.clone()),
+                EditColumn::Label => TrackField::Label(new_val.clone()),
+                EditColumn::Remixer => TrackField::Remixer(new_val.clone()),
+                EditColumn::Key => TrackField::Key(new_val.clone()),
+                EditColumn::Comment => TrackField::Comment(new_val.clone()),
+                EditColumn::Isrc => TrackField::Isrc(new_val.clone()),
+                EditColumn::Lyricist => TrackField::Lyricist(new_val.clone()),
+                EditColumn::MixName => TrackField::MixName(new_val.clone()),
+                EditColumn::ReleaseDate => TrackField::ReleaseDate(new_val.clone()),
+                EditColumn::Bpm => TrackField::Tempo(new_val.parse().unwrap_or(0)),
+                EditColumn::Year => TrackField::Year(new_val.parse().unwrap_or(0)),
+                EditColumn::TrackNumber => TrackField::TrackNumber(new_val.parse().unwrap_or(0)),
+                EditColumn::DiscNumber => TrackField::DiscNumber(new_val.parse().unwrap_or(0)),
+                EditColumn::AddedAt => return, // added_at not editable via aoide
+            };
+
+            let scroll_id = track_uid.clone();
+            let lib = consume_context::<Arc<Lib>>();
             spawn(async move {
-                let _ = db_op(move |lib| lib.update_track_from(&track)).await;
+                let _ = spawn_blocking(move || lib.update_track(&track_uid, field)).await;
             });
 
             let js = format!(
@@ -208,24 +194,29 @@ pub fn Library(
 
     let mut update_rating = move |track_id: String, new_val: u8| {
         let mut w = tracks.write();
-        if let Some(twf) = w.iter_mut().find(|t| t.track.id == track_id) {
-            twf.track.rating = new_val;
-            let track = twf.track.clone();
+        if let Some(twf) = w.iter_mut().find(|t| t.id == track_id) {
+            twf.rating = new_val;
             drop(w);
+            let lib = consume_context::<Arc<Lib>>();
             spawn(async move {
-                let _ = db_op(move |lib| lib.update_track_from(&track)).await;
+                let _ = spawn_blocking(move || {
+                    lib.update_track(&track_id, TrackField::Rating(new_val))
+                })
+                .await;
             });
         }
     };
 
     let mut update_color = move |track_id: String, new_val: u8| {
         let mut w = tracks.write();
-        if let Some(twf) = w.iter_mut().find(|t| t.track.id == track_id) {
-            twf.track.color = new_val;
-            let track = twf.track.clone();
+        if let Some(twf) = w.iter_mut().find(|t| t.id == track_id) {
+            twf.color = new_val;
             drop(w);
+            let lib = consume_context::<Arc<Lib>>();
             spawn(async move {
-                let _ = db_op(move |lib| lib.update_track_from(&track)).await;
+                let _ =
+                    spawn_blocking(move || lib.update_track(&track_id, TrackField::Color(new_val)))
+                        .await;
             });
         }
     };
@@ -244,10 +235,10 @@ pub fn Library(
                             return;
                         };
                         let input = folder.path().to_path_buf();
-                        let db = paths::db_path();
+                        let lib = consume_context::<Arc<Lib>>();
                         scanning.set(true);
 
-                        if let Ok(Ok(r)) = spawn_blocking(move || sync::import_folder(&db, &input)).await {
+                        if let Ok(Ok(r)) = spawn_blocking(move || sync::import_folder(&lib, &input)).await {
                             if !r.warnings.is_empty() {
                                 import_warnings.set(r.warnings);
                             }
@@ -291,10 +282,10 @@ pub fn Library(
                             return;
                         };
                         let paths: Vec<_> = files.iter().map(|f| f.path().to_path_buf()).collect();
-                        let db = paths::db_path();
+                        let lib = consume_context::<Arc<Lib>>();
                         scanning.set(true);
 
-                        if let Ok(Ok(r)) = spawn_blocking(move || sync::import_files(&db, paths)).await {
+                        if let Ok(r) = spawn_blocking(move || sync::import_files(&lib, paths)).await {
                             if !r.warnings.is_empty() {
                                 import_warnings.set(r.warnings);
                             }
@@ -467,7 +458,7 @@ pub fn Library(
                     tbody {
                         for (row_idx, twf) in sorted_tracks().into_iter().enumerate() {
                             {
-                                let track_id = twf.track.id.clone();
+                                let track_id = twf.id.clone();
                                 let is_selected = selected_tracks.read().contains(&track_id);
                                 rsx! {
                                     tr {
@@ -493,7 +484,7 @@ pub fn Library(
                                                     // Shift+click: range select
                                                     let sorted = sorted_tracks();
                                                     let anchor = last_clicked().and_then(|id| {
-                                                        sorted.iter().position(|t| t.track.id == id)
+                                                        sorted.iter().position(|t| t.id == id)
                                                     }).unwrap_or(0);
                                                     let (start, end) = if anchor <= row_idx {
                                                         (anchor, row_idx)
@@ -502,7 +493,7 @@ pub fn Library(
                                                     };
                                                     let mut sel = selected_tracks.write();
                                                     for t in &sorted[start..=end] {
-                                                        sel.insert(t.track.id.clone());
+                                                        sel.insert(t.id.clone());
                                                     }
                                                 } else {
                                                     // Plain click: select only this row
@@ -538,7 +529,7 @@ pub fn Library(
                                         EditableCell {
                                             track_id: track_id.clone(),
                                             column: EditColumn::Title,
-                                            value: twf.track.title.clone(),
+                                            value: twf.title.clone(),
                                             editing,
                                             edit_value,
                                             on_commit: move |()| commit_edit(),
@@ -547,7 +538,7 @@ pub fn Library(
                                         EditableCell {
                                             track_id: track_id.clone(),
                                             column: EditColumn::Artist,
-                                            value: twf.track.artist.clone(),
+                                            value: twf.artist.clone(),
                                             editing,
                                             edit_value,
                                             on_commit: move |()| commit_edit(),
@@ -556,7 +547,7 @@ pub fn Library(
                                         EditableCell {
                                             track_id: track_id.clone(),
                                             column: EditColumn::Album,
-                                            value: twf.track.album.clone(),
+                                            value: twf.album.clone(),
                                             editing,
                                             edit_value,
                                             on_commit: move |()| commit_edit(),
@@ -566,7 +557,7 @@ pub fn Library(
                                             td { class: "formats-cell",
                                                 for file in &twf.files {
                                                     {
-                                                        let file_id = file.id.clone();
+                                                        let file_path_ctx = file.file_path.clone();
                                                         let track_id_for_file = track_id.clone();
                                                         let fmt = file.format.clone();
                                                         rsx! {
@@ -578,7 +569,7 @@ pub fn Library(
                                                                         x: e.page_coordinates().x,
                                                                         y: e.page_coordinates().y,
                                                                         target: ContextTarget::File {
-                                                                            file_id: file_id.clone(),
+                                                                            file_path: file_path_ctx.clone(),
                                                                             track_id: track_id_for_file.clone(),
                                                                             format: fmt.clone(),
                                                                         },
@@ -592,12 +583,12 @@ pub fn Library(
                                             }
                                         }
                                         if !hidden_cols.read().contains(&Column::Duration) {
-                                            td { "{format_duration(twf.track.duration_secs)}" }
+                                            td { "{format_duration(twf.duration_secs)}" }
                                         }
                                         EditableCell {
                                             track_id: track_id.clone(),
                                             column: EditColumn::Genre,
-                                            value: twf.track.genre.clone(),
+                                            value: twf.genre.clone(),
                                             editing,
                                             edit_value,
                                             on_commit: move |()| commit_edit(),
@@ -606,7 +597,7 @@ pub fn Library(
                                         EditableCell {
                                             track_id: track_id.clone(),
                                             column: EditColumn::Composer,
-                                            value: twf.track.composer.clone(),
+                                            value: twf.composer.clone(),
                                             editing,
                                             edit_value,
                                             on_commit: move |()| commit_edit(),
@@ -615,7 +606,7 @@ pub fn Library(
                                         EditableCell {
                                             track_id: track_id.clone(),
                                             column: EditColumn::Label,
-                                            value: twf.track.label.clone(),
+                                            value: twf.label.clone(),
                                             editing,
                                             edit_value,
                                             on_commit: move |()| commit_edit(),
@@ -624,7 +615,7 @@ pub fn Library(
                                         EditableCell {
                                             track_id: track_id.clone(),
                                             column: EditColumn::Remixer,
-                                            value: twf.track.remixer.clone(),
+                                            value: twf.remixer.clone(),
                                             editing,
                                             edit_value,
                                             on_commit: move |()| commit_edit(),
@@ -633,7 +624,7 @@ pub fn Library(
                                         EditableCell {
                                             track_id: track_id.clone(),
                                             column: EditColumn::Key,
-                                            value: twf.track.key.clone(),
+                                            value: twf.key.clone(),
                                             editing,
                                             edit_value,
                                             on_commit: move |()| commit_edit(),
@@ -642,7 +633,7 @@ pub fn Library(
                                         EditableCell {
                                             track_id: track_id.clone(),
                                             column: EditColumn::Comment,
-                                            value: twf.track.comment.clone(),
+                                            value: twf.comment.clone(),
                                             editing,
                                             edit_value,
                                             on_commit: move |()| commit_edit(),
@@ -651,7 +642,7 @@ pub fn Library(
                                         EditableCell {
                                             track_id: track_id.clone(),
                                             column: EditColumn::Isrc,
-                                            value: twf.track.isrc.clone(),
+                                            value: twf.isrc.clone(),
                                             editing,
                                             edit_value,
                                             on_commit: move |()| commit_edit(),
@@ -660,7 +651,7 @@ pub fn Library(
                                         EditableCell {
                                             track_id: track_id.clone(),
                                             column: EditColumn::Lyricist,
-                                            value: twf.track.lyricist.clone(),
+                                            value: twf.lyricist.clone(),
                                             editing,
                                             edit_value,
                                             on_commit: move |()| commit_edit(),
@@ -669,7 +660,7 @@ pub fn Library(
                                         EditableCell {
                                             track_id: track_id.clone(),
                                             column: EditColumn::MixName,
-                                            value: twf.track.mix_name.clone(),
+                                            value: twf.mix_name.clone(),
                                             editing,
                                             edit_value,
                                             on_commit: move |()| commit_edit(),
@@ -678,7 +669,7 @@ pub fn Library(
                                         EditableCell {
                                             track_id: track_id.clone(),
                                             column: EditColumn::ReleaseDate,
-                                            value: twf.track.release_date.clone(),
+                                            value: twf.release_date.clone(),
                                             editing,
                                             edit_value,
                                             on_commit: move |()| commit_edit(),
@@ -687,7 +678,7 @@ pub fn Library(
                                         EditableCell {
                                             track_id: track_id.clone(),
                                             column: EditColumn::Bpm,
-                                            value: if twf.track.tempo == 0 { String::new() } else { twf.track.tempo.to_string() },
+                                            value: if twf.tempo == 0 { String::new() } else { twf.tempo.to_string() },
                                             editing,
                                             edit_value,
                                             on_commit: move |()| commit_edit(),
@@ -696,7 +687,7 @@ pub fn Library(
                                         EditableCell {
                                             track_id: track_id.clone(),
                                             column: EditColumn::Year,
-                                            value: if twf.track.year == 0 { String::new() } else { twf.track.year.to_string() },
+                                            value: if twf.year == 0 { String::new() } else { twf.year.to_string() },
                                             editing,
                                             edit_value,
                                             on_commit: move |()| commit_edit(),
@@ -705,7 +696,7 @@ pub fn Library(
                                         EditableCell {
                                             track_id: track_id.clone(),
                                             column: EditColumn::TrackNumber,
-                                            value: if twf.track.track_number == 0 { String::new() } else { twf.track.track_number.to_string() },
+                                            value: if twf.track_number == 0 { String::new() } else { twf.track_number.to_string() },
                                             editing,
                                             edit_value,
                                             on_commit: move |()| commit_edit(),
@@ -714,7 +705,7 @@ pub fn Library(
                                         EditableCell {
                                             track_id: track_id.clone(),
                                             column: EditColumn::DiscNumber,
-                                            value: if twf.track.disc_number == 0 { String::new() } else { twf.track.disc_number.to_string() },
+                                            value: if twf.disc_number == 0 { String::new() } else { twf.disc_number.to_string() },
                                             editing,
                                             edit_value,
                                             on_commit: move |()| commit_edit(),
@@ -722,7 +713,7 @@ pub fn Library(
                                         }
                                         RatingCell {
                                             track_id: track_id.clone(),
-                                            value: twf.track.rating,
+                                            value: twf.rating,
                                             on_change: {
                                                 let tid = track_id.clone();
                                                 move |v: u8| update_rating(tid.clone(), v)
@@ -731,7 +722,7 @@ pub fn Library(
                                         }
                                         ColorCell {
                                             track_id: track_id.clone(),
-                                            value: twf.track.color,
+                                            value: twf.color,
                                             on_change: {
                                                 let tid = track_id.clone();
                                                 move |v: u8| update_color(tid.clone(), v)
@@ -741,7 +732,7 @@ pub fn Library(
                                         EditableCell {
                                             track_id: track_id.clone(),
                                             column: EditColumn::AddedAt,
-                                            value: twf.track.added_at.clone(),
+                                            value: twf.added_at.clone(),
                                             editing,
                                             edit_value,
                                             on_commit: move |()| commit_edit(),
@@ -792,22 +783,23 @@ pub fn Library(
                                 }
                             }
                         },
-                        ContextTarget::File { file_id, track_id, format } => rsx! {
+                        ContextTarget::File { file_path, track_id, format } => rsx! {
                             button {
                                 class: "context-item danger",
                                 onclick: move |_| {
-                                    let file_id = file_id.clone();
+                                    let file_path = file_path.clone();
                                     let track_id = track_id.clone();
                                     context_menu.set(None);
 
                                     let mut w = tracks.write();
-                                    if let Some(twf) = w.iter_mut().find(|t| t.track.id == track_id) {
-                                        twf.files.retain(|f| f.id != file_id);
+                                    if let Some(twf) = w.iter_mut().find(|t| t.id == track_id) {
+                                        twf.files.retain(|f| f.file_path != file_path);
                                     }
                                     drop(w);
 
+                                    let lib = consume_context::<Arc<Lib>>();
                                     spawn(async move {
-                                        let _ = db_op(move |lib| lib.delete_file(&file_id)).await;
+                                        let _ = spawn_blocking(move || lib.delete_track_by_path(&file_path)).await;
                                     });
                                 },
                                 "Remove {format} file"
@@ -833,7 +825,7 @@ pub fn Library(
                                         context_menu.set(None);
                                         let r = tracks.read();
                                         for id in &ids {
-                                            if let Some(twf) = r.iter().find(|t| t.track.id == *id)
+                                            if let Some(twf) = r.iter().find(|t| t.id == *id)
                                                 && let Some(file) = twf.files.first() {
                                                     let _ = open::that(&file.file_path);
                                                 }
@@ -849,11 +841,12 @@ pub fn Library(
                                         selected_tracks.write().clear();
 
                                         let id_set: HashSet<String> = ids.iter().cloned().collect();
-                                        tracks.write().retain(|t| !id_set.contains(&t.track.id));
+                                        tracks.write().retain(|t| !id_set.contains(&t.id));
 
                                         spawn(async move {
                                             for id in ids {
-                                                let _ = db_op(move |lib| lib.delete_track(&id)).await;
+                                                let lib = consume_context::<Arc<Lib>>();
+                                                let _ = spawn_blocking(move || lib.delete_track(&id)).await;
                                             }
                                         });
                                     },

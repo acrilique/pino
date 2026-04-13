@@ -7,9 +7,9 @@
 //
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-use super::{SyncError, SyncWarnings, file_size_on_disk, file_stem_string, read_metadata};
-use crate::db::{Library, Track, TrackFile};
+use super::SyncError;
 use crate::format::SupportedFormat;
+use crate::library::Library;
 use std::path::{Path, PathBuf};
 
 fn is_known_audio_extension(ext: &str) -> bool {
@@ -52,84 +52,19 @@ pub struct ImportResult {
     pub warnings: Vec<String>,
 }
 
-fn import_tracks(db: &Library, audio_files: &[(PathBuf, Option<SupportedFormat>)]) -> ImportResult {
-    let mut imported = 0u32;
-    let warnings = SyncWarnings::new();
+/// Import a list of audio file paths into the library using aoide-media-file.
+fn import_tracks(
+    lib: &Library,
+    audio_files: &[(PathBuf, Option<SupportedFormat>)],
+) -> ImportResult {
+    let paths: Vec<PathBuf> = audio_files.iter().map(|(p, _)| p.clone()).collect();
 
-    for (src_path, src_format) in audio_files {
-        let path_str = src_path.to_string_lossy().to_string();
-        if db.has_file_path(&path_str).unwrap_or(false) {
-            continue;
-        }
-
-        let original_stem = file_stem_string(src_path);
-
-        let format_str: String = match src_format {
-            Some(fmt) => <SupportedFormat as Into<&str>>::into(*fmt).to_string(),
-            None => src_path
-                .extension()
-                .unwrap_or_default()
-                .to_str()
-                .unwrap_or("")
-                .to_ascii_lowercase(),
-        };
-
-        let meta = read_metadata(src_path, &original_stem, &warnings);
-
-        let file_size = file_size_on_disk(src_path);
-
-        let track_id = super::new_id();
-        let track = Track {
-            id: track_id.clone(),
-            title: meta.title,
-            artist: meta.artist,
-            album: meta.album,
-            genre: meta.genre,
-            composer: meta.composer,
-            label: meta.label,
-            remixer: meta.remixer,
-            key: meta.key,
-            comment: meta.comment,
-            isrc: meta.isrc,
-            lyricist: meta.lyricist,
-            mix_name: meta.mix_name,
-            release_date: meta.release_date,
-            duration_secs: meta.duration_secs,
-            tempo: 0,
-            year: meta.year,
-            track_number: meta.track_number,
-            disc_number: meta.disc_number,
-            rating: meta.rating,
-            color: meta.color,
-            artwork_path: meta.artwork_path,
-            added_at: super::today(),
-        };
-
-        let file = TrackFile {
-            id: super::new_id(),
-            track_id,
-            format: format_str,
-            file_path: path_str,
-            file_size,
-            sample_rate: meta.sample_rate,
-            bitrate: meta.bitrate,
-            added_at: super::today(),
-        };
-
-        if let Err(e) = db.add_track(&track) {
-            warnings.push(format!("Failed to add track: {e}"));
-            continue;
-        }
-        if let Err(e) = db.add_file(&file) {
-            warnings.push(format!("Failed to add file: {e}"));
-            continue;
-        }
-        imported += 1;
-    }
-
-    ImportResult {
-        imported,
-        warnings: warnings.into_vec(),
+    match lib.import_files(&paths) {
+        Ok((imported, warnings)) => ImportResult { imported, warnings },
+        Err(e) => ImportResult {
+            imported: 0,
+            warnings: vec![format!("Import failed: {e}")],
+        },
     }
 }
 
@@ -144,26 +79,20 @@ fn classify_file(path: PathBuf) -> Option<(PathBuf, Option<SupportedFormat>)> {
     }
 }
 
-/// Scan a folder and import all audio files into the local database.
-///
-/// Returns the number of newly imported tracks.
-pub fn import_folder(db_path: &Path, input_dir: &Path) -> Result<ImportResult, SyncError> {
-    let db = Library::open(db_path)?;
-
+/// Scan a folder and import all audio files into the library.
+pub fn import_folder(lib: &Library, input_dir: &Path) -> Result<ImportResult, SyncError> {
     let all_formats = SupportedFormat::ALL.to_vec();
     let mut audio_files = Vec::new();
     find_audio_files(input_dir, &all_formats, true, &mut audio_files)?;
     audio_files.sort_by(|(a, _), (b, _)| a.cmp(b));
 
-    Ok(import_tracks(&db, &audio_files))
+    Ok(import_tracks(lib, &audio_files))
 }
 
-/// Import specific audio files into the local database.
-pub fn import_files(db_path: &Path, paths: Vec<PathBuf>) -> Result<ImportResult, SyncError> {
-    let db = Library::open(db_path)?;
-
+/// Import specific audio files into the library.
+pub fn import_files(lib: &Library, paths: Vec<PathBuf>) -> ImportResult {
     let mut audio_files: Vec<_> = paths.into_iter().filter_map(classify_file).collect();
     audio_files.sort_by(|(a, _), (b, _)| a.cmp(b));
 
-    Ok(import_tracks(&db, &audio_files))
+    import_tracks(lib, &audio_files)
 }

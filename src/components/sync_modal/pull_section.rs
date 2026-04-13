@@ -9,15 +9,17 @@
 
 use crate::components::library::refresh_tracks;
 use crate::components::log::{LogEntry, log_task_result};
+use crate::library::Library;
+use crate::sync;
 use crate::task::{ProgressHandle, run_with_progress};
-use crate::{db, paths, sync};
 use dioxus::prelude::*;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use super::SyncState;
 
 #[component]
-pub fn PullSection(mut tracks: Signal<Vec<db::TrackWithFiles>>) -> Element {
+pub fn PullSection(mut tracks: Signal<Vec<crate::bridge::TrackView>>) -> Element {
     let state = use_context::<SyncState>();
     let dest_dir = state.dest_dir;
     let mut pulling = state.pulling;
@@ -33,7 +35,7 @@ pub fn PullSection(mut tracks: Signal<Vec<db::TrackWithFiles>>) -> Element {
                 class: "pull-btn",
                 disabled: pulling() || (state.syncing)(),
                 onclick: move |_| {
-                    let db = paths::db_path();
+                    let lib = consume_context::<Arc<Library>>();
                     let dest = PathBuf::from(dest_dir());
                     pulling.set(true);
                     log_entries.write().clear();
@@ -46,7 +48,7 @@ pub fn PullSection(mut tracks: Signal<Vec<db::TrackWithFiles>>) -> Element {
 
                     spawn(async move {
                         let result = run_with_progress(&mut progress, move |callback| {
-                            sync::pull_from_remote(&db, &dest, &callback)
+                            sync::pull_from_remote(&lib, &dest, &callback)
                         })
                         .await;
 

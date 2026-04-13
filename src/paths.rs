@@ -15,10 +15,7 @@ pub fn data_dir() -> PathBuf {
         .join("pino")
 }
 
-pub fn db_path() -> PathBuf {
-    data_dir().join("library.db")
-}
-
-pub fn artwork_dir() -> PathBuf {
-    data_dir().join("artwork")
+/// Directory for the aoide database (`Library::open` takes a dir).
+pub fn db_dir() -> PathBuf {
+    data_dir()
 }

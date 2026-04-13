@@ -7,8 +7,8 @@
 //
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-use super::{SyncError, SyncProgress, SyncWarnings, new_id, open_remote_db, today, unique_path};
-use crate::db::{Library, TrackFile, TrackWithFiles};
+use super::{SyncError, SyncProgress, SyncWarnings, open_remote_library, unique_path};
+use crate::library::Library;
 use crate::paths;
 use std::collections::HashSet;
 use std::path::Path;
@@ -22,21 +22,20 @@ pub struct PullResult {
 /// Import tracks from the remote (USB) into the local library.
 ///
 /// For each track on the remote that doesn't exist locally, copies the audio file from
-/// `<USB>/Contents/` to `~/.local/share/pino/imported/` and registers it in the local DB.
+/// `<USB>/Contents/` to `~/.local/share/pino/imported/` and registers it in the local library.
 pub fn pull_from_remote(
-    db_path: &Path,
+    lib: &Library,
     dest_dir: &Path,
     on_progress: &(dyn Fn(SyncProgress) + Sync),
 ) -> Result<PullResult, SyncError> {
-    let local_db = Library::open(db_path)?;
-    let remote_db = open_remote_db(dest_dir)?.ok_or(SyncError::NoRemoteDb)?;
+    let remote_lib = open_remote_library(dest_dir)?.ok_or(SyncError::NoRemoteDb)?;
 
-    let local_ids: HashSet<String> = local_db.get_track_ids()?.into_iter().collect();
-    let remote_tracks = remote_db.get_all_tracks_with_files()?;
+    let local_ids: HashSet<String> = lib.track_ids()?.into_iter().collect();
+    let remote_tracks = remote_lib.all_tracks()?;
 
-    let to_pull: Vec<&TrackWithFiles> = remote_tracks
+    let to_pull: Vec<_> = remote_tracks
         .iter()
-        .filter(|twf| !local_ids.contains(&twf.track.id))
+        .filter(|tv| !local_ids.contains(&tv.id))
         .collect();
 
     if to_pull.is_empty() {
@@ -54,33 +53,23 @@ pub fn pull_from_remote(
     let total = u32::try_from(to_pull.len())?;
     let mut pulled = 0u32;
 
-    for (i, twf) in to_pull.iter().enumerate() {
+    for (i, tv) in to_pull.iter().enumerate() {
         on_progress(SyncProgress {
             phase: "Pulling from device",
             current: u32::try_from(i + 1)?,
             total,
         });
 
-        // Insert the track metadata.
-        if let Err(e) = local_db.add_track(&twf.track) {
-            warnings.push(format!("Failed to add track: {e}"));
-            continue;
-        }
-
-        // Copy each file from USB to the local imported directory.
+        // Copy each file from USB to the local imported directory, then import.
         let mut any_file_ok = false;
-        for remote_file in &twf.files {
-            let src = contents_dir.join(&remote_file.file_path);
+        for file_view in &tv.files {
+            let src = contents_dir.join(&file_view.file_path);
             if !src.exists() {
-                warnings.push(format!(
-                    "File not found on device: {}",
-                    remote_file.file_path
-                ));
+                warnings.push(format!("File not found on device: {}", file_view.file_path));
                 continue;
             }
 
-            let dest = import_dir.join(&remote_file.file_path);
-            // Avoid overwriting existing files with the same name.
+            let dest = import_dir.join(&file_view.file_path);
             let dest = if dest.exists() {
                 unique_path(&dest)
             } else {
@@ -92,22 +81,15 @@ pub fn pull_from_remote(
                 continue;
             }
 
-            let local_file = TrackFile {
-                id: new_id(),
-                track_id: twf.track.id.clone(),
-                format: remote_file.format.clone(),
-                file_path: dest.to_string_lossy().to_string(),
-                file_size: remote_file.file_size,
-                sample_rate: remote_file.sample_rate,
-                bitrate: remote_file.bitrate,
-                added_at: today(),
-            };
-
-            if let Err(e) = local_db.add_file(&local_file) {
-                warnings.push(format!("Failed to register file: {e}"));
-                continue;
+            // Import the copied file into the local library via aoide.
+            match lib.import_files(&[dest]) {
+                Ok(_) => {
+                    any_file_ok = true;
+                }
+                Err(e) => {
+                    warnings.push(format!("Failed to import pulled file: {e}"));
+                }
             }
-            any_file_ok = true;
         }
 
         if any_file_ok {

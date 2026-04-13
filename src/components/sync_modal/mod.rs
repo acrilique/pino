@@ -13,10 +13,12 @@ mod push_section;
 
 use crate::components::log::{LogEntry, LogPanel};
 use crate::format::SupportedFormat;
+use crate::library::Library;
 use crate::task::spawn_blocking;
-use crate::{db, paths, prefs, sync};
+use crate::{prefs, sync};
 use dioxus::prelude::*;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use dir_field::DirField;
 use pull_section::PullSection;
@@ -116,10 +118,10 @@ pub fn check_device(state: &SyncState) {
         return;
     }
     dest_error.set(None);
-    let db = paths::db_path();
+    let lib = consume_context::<Arc<Library>>();
     checking.set(true);
     spawn(async move {
-        match spawn_blocking(move || sync::check_sync_status(&db, &dest)).await {
+        match spawn_blocking(move || sync::check_sync_status(&lib, &dest)).await {
             Ok(Ok(status)) => sync_status.set(Some(status)),
             Ok(Err(e)) => {
                 sync_status.set(None);
@@ -137,7 +139,10 @@ pub fn check_device(state: &SyncState) {
 // ── Component ────────────────────────────────────────────────────────────────
 
 #[component]
-pub fn SyncModal(mut tracks: Signal<Vec<db::TrackWithFiles>>, on_close: EventHandler) -> Element {
+pub fn SyncModal(
+    mut tracks: Signal<Vec<crate::bridge::TrackView>>,
+    on_close: EventHandler,
+) -> Element {
     let state = use_context::<SyncState>();
     let dest_dir = state.dest_dir;
     let format_enabled = state.format_enabled;

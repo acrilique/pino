@@ -11,16 +11,18 @@ use crate::components::library::refresh_tracks;
 use crate::components::log::{LogEntry, log_task_result};
 use crate::components::select::{Select, SelectList, SelectOption, SelectTrigger};
 use crate::format::SupportedFormat;
+use crate::library::Library;
 use crate::task::{ProgressHandle, run_with_progress};
-use crate::{db, ffmpeg, paths, sync};
+use crate::{ffmpeg, sync};
 use dioxus::prelude::*;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use super::{FORMATS, SyncState, enabled_formats, format_label};
 
 #[component]
 pub fn PushSection(
-    mut tracks: Signal<Vec<db::TrackWithFiles>>,
+    mut tracks: Signal<Vec<crate::bridge::TrackView>>,
     need_conversion: Memo<u32>,
 ) -> Element {
     let state = use_context::<SyncState>();
@@ -48,7 +50,7 @@ pub fn PushSection(
             jobs: jobs(),
         };
 
-        let db = paths::db_path();
+        let lib = consume_context::<Arc<Library>>();
         log_entries.write().clear();
         ffmpeg_missing.set(false);
         syncing.set(true);
@@ -58,7 +60,7 @@ pub fn PushSection(
 
         spawn(async move {
             let result = run_with_progress(&mut progress, move |callback| {
-                sync::sync(&db, &dest, &config, &callback)
+                sync::sync(&lib, &dest, &config, &callback)
             })
             .await;
 
