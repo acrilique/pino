@@ -7,7 +7,7 @@
 //
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-use super::{SyncError, today};
+use super::{SyncError, device_relative_path, today};
 use crate::bridge::TrackView;
 use crate::format::SupportedFormat;
 use crate::library::Library;
@@ -58,7 +58,7 @@ pub(super) fn generate_pdb(lib: &Library, dest_dir: &Path) -> Result<(), SyncErr
     let mut pdb = create_pdb(&rekordbox_dir)?;
 
     let today = today();
-    let exported_count = insert_tracks(&mut pdb, &all, &maps, &today)?;
+    let exported_count = insert_tracks(&mut pdb, &all, &maps, &today, dest_dir)?;
     insert_artists(&mut pdb, &maps.artists)?;
     insert_albums(&mut pdb, &maps.albums)?;
     insert_genres(&mut pdb, &maps.genres)?;
@@ -212,6 +212,7 @@ fn insert_tracks(
     all: &[TrackView],
     maps: &IdMaps,
     today: &str,
+    dest_dir: &Path,
 ) -> Result<u32, SyncError> {
     let mut exported_count: u32 = 0;
 
@@ -262,7 +263,7 @@ fn insert_tracks(
             maps.artworks[&tv.artwork_path]
         };
 
-        let pioneer_path = format!("/Contents/{}", file.file_path);
+        let (pioneer_path, filename, file_size) = resolve_device_file_info(file, dest_dir);
 
         let Ok(file_type) = SupportedFormat::try_from(file.format.as_str()) else {
             eprintln!(
@@ -284,12 +285,12 @@ fn insert_tracks(
             .remixer_id(remixer_id)
             .artwork_id(artwork_id)
             .file_path(pioneer_path.parse()?)
-            .filename(file.file_path.parse()?)
+            .filename(filename.parse()?)
             .sample_rate(file.sample_rate)
             .sample_depth(16)
             .bitrate(file.bitrate)
             .duration(tv.duration_secs)
-            .file_size(file.file_size)
+            .file_size(file_size)
             .file_type(file_type.into())
             .tempo(tv.tempo)
             .year(tv.year)
@@ -319,6 +320,27 @@ fn insert_tracks(
     }
 
     Ok(exported_count)
+}
+
+fn resolve_device_file_info(
+    file: &crate::bridge::TrackFileView,
+    dest_dir: &Path,
+) -> (String, String, u32) {
+    let relative_path = device_relative_path(&file.file_path);
+    let relative_path_str = relative_path.to_string_lossy().into_owned();
+    let filename = relative_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .map_or_else(|| relative_path_str.clone(), ToOwned::to_owned);
+    let file_size = std::fs::metadata(dest_dir.join("Contents").join(&relative_path))
+        .map(|metadata| u32::try_from(metadata.len()).unwrap_or(u32::MAX))
+        .unwrap_or(file.file_size);
+
+    (
+        format!("/Contents/{relative_path_str}"),
+        filename,
+        file_size,
+    )
 }
 
 /// Insert artist rows into the PDB, sorted by their assigned IDs.

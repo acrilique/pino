@@ -201,7 +201,7 @@ pub fn Library(
             let scroll_id = track_uid.clone();
             let lib = consume_context::<Arc<Lib>>();
             spawn(async move {
-                let _ = spawn_blocking(move || lib.update_track(&track_uid, field)).await;
+                let _ = spawn_blocking(move || lib.update_track(&track_uid, &field)).await;
             });
 
             let js = format!(
@@ -220,7 +220,7 @@ pub fn Library(
             let lib = consume_context::<Arc<Lib>>();
             spawn(async move {
                 let _ = spawn_blocking(move || {
-                    lib.update_track(&track_id, TrackField::Rating(new_val))
+                    lib.update_track(&track_id, &TrackField::Rating(new_val))
                 })
                 .await;
             });
@@ -234,9 +234,10 @@ pub fn Library(
             drop(w);
             let lib = consume_context::<Arc<Lib>>();
             spawn(async move {
-                let _ =
-                    spawn_blocking(move || lib.update_track(&track_id, TrackField::Color(new_val)))
-                        .await;
+                let _ = spawn_blocking(move || {
+                    lib.update_track(&track_id, &TrackField::Color(new_val))
+                })
+                .await;
             });
         }
     };

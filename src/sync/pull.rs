@@ -7,7 +7,10 @@
 //
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-use super::{SyncError, SyncProgress, SyncWarnings, open_remote_library, unique_path};
+use super::{
+    SyncError, SyncProgress, SyncWarnings, device_relative_path, open_remote_library,
+    reconcile_remote_track_ids, unique_path,
+};
 use crate::library::Library;
 use crate::paths;
 use std::collections::HashSet;
@@ -29,6 +32,7 @@ pub fn pull_from_remote(
     on_progress: &(dyn Fn(SyncProgress) + Sync),
 ) -> Result<PullResult, SyncError> {
     let remote_lib = open_remote_library(dest_dir)?.ok_or(SyncError::NoRemoteDb)?;
+    reconcile_remote_track_ids(lib, &remote_lib)?;
 
     let local_ids: HashSet<String> = lib.track_ids()?.into_iter().collect();
     let remote_tracks = remote_lib.all_tracks()?;
@@ -63,13 +67,12 @@ pub fn pull_from_remote(
         // Copy each file from USB to the local imported directory, then import.
         let mut any_file_ok = false;
         for file_view in &tv.files {
-            // file_view.file_path is an absolute path on the remote; extract just the
-            // filename so that join(import_dir, filename) works correctly.
-            let Some(filename) = Path::new(&file_view.file_path).file_name() else {
+            let remote_rel_path = device_relative_path(&file_view.file_path);
+            let Some(filename) = remote_rel_path.file_name() else {
                 warnings.push(format!("Invalid path on device: {}", file_view.file_path));
                 continue;
             };
-            let src = contents_dir.join(filename);
+            let src = contents_dir.join(&remote_rel_path);
             if !src.exists() {
                 warnings.push(format!("File not found on device: {}", src.display()));
                 continue;
@@ -90,11 +93,19 @@ pub fn pull_from_remote(
             }
 
             // Import the copied file into the local library via aoide.
-            match lib.import_files(&[dest]) {
-                Ok(_) => {
-                    any_file_ok = true;
+            match lib.import_file_variant(&dest, &tv.id, None, tv) {
+                Ok((imported, import_warnings)) => {
+                    for warning in import_warnings {
+                        warnings.push(warning);
+                    }
+                    if imported > 0 {
+                        any_file_ok = true;
+                    } else {
+                        let _ = std::fs::remove_file(&dest);
+                    }
                 }
                 Err(e) => {
+                    let _ = std::fs::remove_file(&dest);
                     warnings.push(format!("Failed to import pulled file: {e}"));
                 }
             }

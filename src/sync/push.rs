@@ -8,8 +8,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 use super::{
-    SyncError, SyncProgress, SyncWarnings, converted_dir, file_stem_string, find_file_in_formats,
-    pdb, remote_db_dir, unique_path_batch,
+    SyncError, SyncProgress, SyncWarnings, converted_dir, device_relative_path, file_stem_string,
+    find_file_in_formats, pdb, reconcile_remote_track_ids, remote_db_dir, unique_path_batch,
 };
 use crate::bridge::TrackView;
 use crate::ffmpeg;
@@ -58,6 +58,7 @@ impl std::fmt::Display for SyncResult {
 // ── Internal types ───────────────────────────────────────────────────────────
 
 struct PreparedItem<'a> {
+    track: &'a TrackView,
     src_file: &'a crate::bridge::TrackFileView,
     src_path: PathBuf,
     dest_filename: String,
@@ -97,6 +98,9 @@ pub fn sync(
     std::fs::create_dir_all(&contents_dir)?;
 
     let local_tracks = lib.all_tracks()?;
+
+    reconcile_remote_track_ids(lib, &remote_lib)?;
+
     let remote_tracks = remote_lib.all_tracks()?;
     let remote_ids: HashSet<String> = remote_tracks.iter().map(|t| t.id.clone()).collect();
 
@@ -123,7 +127,7 @@ pub fn sync(
         .iter()
         .flat_map(|tv| tv.files.iter())
         .filter_map(|f| {
-            Path::new(&f.file_path)
+            device_relative_path(&f.file_path)
                 .file_name()
                 .and_then(|n| n.to_str())
                 .map(|name| (name.to_owned(), 1u32))
@@ -270,6 +274,7 @@ fn prepare_sync_items<'a>(
         };
 
         prepared.push(PreparedItem {
+            track: tv,
             src_file,
             src_path,
             dest_filename,
@@ -371,7 +376,7 @@ fn copy_to_destination(
     prepared: &[PreparedItem],
     convert_ok: &[bool],
     contents_dir: &Path,
-    _local_lib: &Library,
+    local_lib: &Library,
     remote_lib: &Library,
     on_progress: &(dyn Fn(SyncProgress) + Sync),
     warnings: &SyncWarnings,
@@ -396,6 +401,26 @@ fn copy_to_destination(
                 continue;
             }
 
+            match local_lib.import_file_variant(
+                &item.local_conv_path,
+                &item.track.id,
+                None,
+                item.track,
+            ) {
+                Ok((_imported, import_warnings)) => {
+                    for warning in import_warnings {
+                        warnings.push(format!(
+                            "Failed to register converted local file {}: {warning}",
+                            item.local_conv_path.display()
+                        ));
+                    }
+                }
+                Err(e) => warnings.push(format!(
+                    "Failed to register converted local file {}: {e}",
+                    item.local_conv_path.display()
+                )),
+            }
+
             if let Err(e) = std::fs::copy(&item.local_conv_path, &dest_path) {
                 warnings.push(format!("Copy failed for converted file: {e}"));
                 skipped += 1;
@@ -409,11 +434,30 @@ fn copy_to_destination(
         }
 
         // Import the copied file into the remote aoide library.
-        let dest_paths = vec![dest_path];
-        match remote_lib.import_files(&dest_paths) {
-            Ok(_) => {}
+        match remote_lib.import_file_variant(
+            &dest_path,
+            &item.track.id,
+            Some(item.dest_filename.clone()),
+            item.track,
+        ) {
+            Ok((imported, import_warnings)) => {
+                for warning in import_warnings {
+                    warnings.push(format!(
+                        "Failed to import into remote library {}: {warning}",
+                        item.dest_filename
+                    ));
+                }
+                if imported == 0 {
+                    let _ = std::fs::remove_file(&dest_path);
+                    skipped += 1;
+                    continue;
+                }
+            }
             Err(e) => {
+                let _ = std::fs::remove_file(&dest_path);
                 warnings.push(format!("Failed to import into remote library: {e}"));
+                skipped += 1;
+                continue;
             }
         }
 

@@ -26,6 +26,9 @@ use aoide::{
 };
 use chrono::{DateTime, Utc};
 
+const PINO_TRACK_ID_FACET: &str = "pino.track_id";
+const PINO_RATING_FACET: &str = "pino.rating";
+
 // ── View model ───────────────────────────────────────────────────
 
 /// Flat track representation for the UI layer.
@@ -72,6 +75,7 @@ pub struct TrackFileView {
 }
 
 /// Editable field + new value, used for UI → aoide mutations.
+#[derive(Clone)]
 pub enum TrackField {
     Title(String),
     Artist(String),
@@ -104,12 +108,13 @@ pub fn flatten(entity: &Entity) -> TrackView {
     let ContentMetadata::Audio(audio) = &source.content.metadata;
     let file_path = source.content.link.path.as_str();
 
-    let added_at =
-        DateTime::<Utc>::from_timestamp_millis(entity.body.updated_at.unix_timestamp_millis())
-            .map_or_else(String::new, |dt| dt.to_rfc3339());
+    let added_at = DateTime::<Utc>::from_timestamp_millis(
+        track.media_source.collected_at.unix_timestamp_millis(),
+    )
+    .map_or_else(String::new, |dt| dt.to_rfc3339());
 
     TrackView {
-        id: entity.hdr.uid.to_string(),
+        id: track_id(entity),
         title: track.track_title().unwrap_or_default().to_owned(),
         artist: track.track_artist().unwrap_or_default().to_owned(),
         album: track.album_title().unwrap_or_default().to_owned(),
@@ -141,7 +146,7 @@ pub fn flatten(entity: &Entity) -> TrackView {
         }),
         track_number: track.indexes.track.number.map_or(0, u32::from),
         disc_number: track.indexes.disc.number.unwrap_or(0),
-        rating: 0, // No aoide equivalent yet — will use custom facet tag
+        rating: rating(track),
         color: match track.color {
             Some(Color::Index(i)) => i.clamp(0, 8) as u8,
             _ => 0,
@@ -167,7 +172,61 @@ pub fn flatten(entity: &Entity) -> TrackView {
 /// Apply a UI edit to the track inside an entity.
 #[allow(clippy::cast_possible_truncation)]
 pub fn apply_edit(entity: &mut Entity, field: TrackField) {
-    let track = &mut entity.body.track;
+    apply_track_field(&mut entity.body.track, field);
+}
+
+/// Apply every user-editable metadata field from a [`TrackView`] to a track.
+pub fn apply_view(track: &mut track::Track, view: &TrackView) {
+    apply_track_field(track, TrackField::Title(view.title.clone()));
+    apply_track_field(track, TrackField::Artist(view.artist.clone()));
+    apply_track_field(track, TrackField::Album(view.album.clone()));
+    apply_track_field(track, TrackField::Genre(view.genre.clone()));
+    apply_track_field(track, TrackField::Composer(view.composer.clone()));
+    apply_track_field(track, TrackField::Label(view.label.clone()));
+    apply_track_field(track, TrackField::Remixer(view.remixer.clone()));
+    apply_track_field(track, TrackField::Key(view.key.clone()));
+    apply_track_field(track, TrackField::Comment(view.comment.clone()));
+    apply_track_field(track, TrackField::Isrc(view.isrc.clone()));
+    apply_track_field(track, TrackField::Lyricist(view.lyricist.clone()));
+    apply_track_field(track, TrackField::MixName(view.mix_name.clone()));
+    apply_track_field(track, TrackField::ReleaseDate(view.release_date.clone()));
+    apply_track_field(track, TrackField::Tempo(view.tempo));
+    apply_track_field(track, TrackField::Year(view.year));
+    apply_track_field(track, TrackField::TrackNumber(view.track_number));
+    apply_track_field(track, TrackField::DiscNumber(view.disc_number));
+    apply_track_field(track, TrackField::Rating(view.rating));
+    apply_track_field(track, TrackField::Color(view.color));
+}
+
+/// Return logical Pino track ID, falling back to aoide's entity UID.
+pub fn track_id(entity: &Entity) -> String {
+    track_id_from_track(&entity.body.track).unwrap_or_else(|| entity.hdr.uid.to_string())
+}
+
+/// Return stored logical Pino track ID, if any.
+pub fn track_id_from_track(track: &track::Track) -> Option<String> {
+    custom_facet_value(track, &pino_track_id_facet())
+}
+
+/// Persist logical Pino track ID inside custom track tags.
+pub fn set_track_id(track: &mut track::Track, id: &str) {
+    set_facet_label(track, &pino_track_id_facet(), id.to_owned());
+}
+
+/// Return the content path stored for a track entity.
+pub fn content_path(entity: &Entity) -> String {
+    entity
+        .body
+        .track
+        .media_source
+        .content
+        .link
+        .path
+        .as_str()
+        .to_owned()
+}
+
+fn apply_track_field(track: &mut track::Track, field: TrackField) {
     match field {
         TrackField::Title(v) => {
             track.set_track_title(v);
@@ -212,13 +271,17 @@ pub fn apply_edit(entity: &mut Entity, field: TrackField) {
             track.released_at = parse_date_or_datetime(&v);
         }
         TrackField::TrackNumber(v) => {
-            track.indexes.track.number = if v == 0 { None } else { Some(v as u16) };
+            track.indexes.track.number = if v == 0 {
+                None
+            } else {
+                Some(u16::try_from(v).unwrap_or(u16::MAX))
+            };
         }
         TrackField::DiscNumber(v) => {
             track.indexes.disc.number = if v == 0 { None } else { Some(v) };
         }
-        TrackField::Rating(_v) => {
-            // TODO: implement via custom facet tag
+        TrackField::Rating(v) => {
+            set_rating(track, v);
         }
         TrackField::Color(v) => {
             track.color = if v == 0 {
@@ -243,6 +306,17 @@ fn facet_label(track: &track::Track, facet_id: &FacetId) -> String {
         .and_then(|ft| ft.tags.first())
         .and_then(|pt| pt.label.as_ref())
         .map_or_else(String::new, |l| l.as_str().to_owned())
+}
+
+fn custom_facet_value(track: &track::Track, facet_id: &FacetId) -> Option<String> {
+    track
+        .tags
+        .facets
+        .iter()
+        .find(|ft| ft.facet_id == *facet_id)
+        .and_then(|ft| ft.tags.first())
+        .and_then(|pt| pt.label.as_ref())
+        .map(|label| label.as_str().to_owned())
 }
 
 /// Get the name of a summary actor for a given role.
@@ -313,29 +387,34 @@ fn set_sub_title(track: &mut track::Track, name: String) {
     track.titles = titles.canonicalize_into();
 }
 
+fn rating(track: &track::Track) -> u8 {
+    custom_facet_value(track, &pino_rating_facet())
+        .and_then(|value| value.parse::<u8>().ok())
+        .map_or(0, |value| value.min(5))
+}
+
+fn set_rating(track: &mut track::Track, value: u8) {
+    let value = value.min(5);
+    if value == 0 {
+        set_facet_label(track, &pino_rating_facet(), String::new());
+    } else {
+        set_facet_label(track, &pino_rating_facet(), value.to_string());
+    }
+}
+
+fn pino_track_id_facet() -> FacetId {
+    FacetId::from_unchecked(PINO_TRACK_ID_FACET)
+}
+
+fn pino_rating_facet() -> FacetId {
+    FacetId::from_unchecked(PINO_RATING_FACET)
+}
+
 /// Apply every field from a [`TrackView`] to the track inside an entity.
 ///
 /// Used when overwriting metadata on the remote library from a local [`TrackView`].
 pub fn apply_all_fields(entity: &mut Entity, view: &TrackView) {
-    apply_edit(entity, TrackField::Title(view.title.clone()));
-    apply_edit(entity, TrackField::Artist(view.artist.clone()));
-    apply_edit(entity, TrackField::Album(view.album.clone()));
-    apply_edit(entity, TrackField::Genre(view.genre.clone()));
-    apply_edit(entity, TrackField::Composer(view.composer.clone()));
-    apply_edit(entity, TrackField::Label(view.label.clone()));
-    apply_edit(entity, TrackField::Remixer(view.remixer.clone()));
-    apply_edit(entity, TrackField::Key(view.key.clone()));
-    apply_edit(entity, TrackField::Comment(view.comment.clone()));
-    apply_edit(entity, TrackField::Isrc(view.isrc.clone()));
-    apply_edit(entity, TrackField::Lyricist(view.lyricist.clone()));
-    apply_edit(entity, TrackField::MixName(view.mix_name.clone()));
-    apply_edit(entity, TrackField::ReleaseDate(view.release_date.clone()));
-    apply_edit(entity, TrackField::Tempo(view.tempo));
-    apply_edit(entity, TrackField::Year(view.year));
-    apply_edit(entity, TrackField::TrackNumber(view.track_number));
-    apply_edit(entity, TrackField::DiscNumber(view.disc_number));
-    apply_edit(entity, TrackField::Rating(view.rating));
-    apply_edit(entity, TrackField::Color(view.color));
+    apply_view(&mut entity.body.track, view);
 }
 
 /// Parse a string into `DateOrDateTime`, trying year-only and full date formats.
