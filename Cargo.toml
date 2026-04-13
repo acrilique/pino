@@ -10,6 +10,7 @@ edition = "2024"
 anyhow = "1"
 aoide = { git = "https://gitlab.com/uklotzde/aoide-rs", rev = "c63135b5f5f6f4f36005080fc1e6ce67554d5837", features = ["desktop-app", "backend-embedded", "sqlite-bundled", "media-file", "tokio"] }
 rekordcrate = { git = "https://github.com/acrilique/rekordcrate", branch = "create-db" }
+unicode-normalization = "0.1"
 chrono = "0.4.44"
 dioxus = { version = "0.7.5", features = ["desktop"] }
 rfd = "0.17.2"

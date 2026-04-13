@@ -18,6 +18,7 @@ use crate::library::Library;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
+use unicode_normalization::UnicodeNormalization;
 
 // ── Public types ─────────────────────────────────────────────────────────────
 
@@ -260,6 +261,10 @@ fn prepare_sync_items<'a>(
 
         let dest_ext: &str = dest_format.into();
         let original_stem = file_stem_string(&src_path);
+        // NFC-normalize so FAT32 filename matches NFC paths in the PDB.
+        // macOS source files often have NFD filenames; without this the CDJ
+        // reads NFC from the PDB but finds NFD on disk and crashes on load.
+        let original_stem: String = original_stem.nfc().collect();
 
         let dest_filename = {
             let base = format!("{original_stem}.{dest_ext}");
