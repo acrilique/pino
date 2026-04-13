@@ -39,13 +39,17 @@ struct IdMaps {
 }
 
 /// Generate a Pioneer PDB database from all tracks in the given library.
-pub(super) fn generate_pdb(lib: &Library, dest_dir: &Path) -> Result<(), SyncError> {
+pub(super) fn generate_pdb(
+    lib: &Library,
+    dest_dir: &Path,
+    warnings: &super::SyncWarnings,
+) -> Result<u32, SyncError> {
     let all = lib
         .all_tracks()
         .map_err(|e| SyncError::Other(e.to_string()))?;
 
     if all.is_empty() {
-        return Ok(());
+        return Ok(0);
     }
 
     let rekordbox_dir = dest_dir.join("PIONEER").join("rekordbox");
@@ -58,7 +62,7 @@ pub(super) fn generate_pdb(lib: &Library, dest_dir: &Path) -> Result<(), SyncErr
     let mut pdb = create_pdb(&rekordbox_dir)?;
 
     let today = today();
-    let exported_count = insert_tracks(&mut pdb, &all, &maps, &today, dest_dir)?;
+    let exported_count = insert_tracks(&mut pdb, &all, &maps, &today, dest_dir, warnings)?;
     insert_artists(&mut pdb, &maps.artists)?;
     insert_albums(&mut pdb, &maps.albums)?;
     insert_genres(&mut pdb, &maps.genres)?;
@@ -81,6 +85,9 @@ pub(super) fn generate_pdb(lib: &Library, dest_dir: &Path) -> Result<(), SyncErr
 
     pdb.close()?;
 
+    let total_tracks = u32::try_from(all.len()).unwrap_or(u32::MAX);
+    let pdb_skipped = total_tracks.saturating_sub(exported_count);
+
     println!(
         "PDB: {} track(s), {} artist(s), {} album(s), {} genre(s), {} key(s), {} label(s), {} artwork(s)",
         exported_count,
@@ -92,7 +99,7 @@ pub(super) fn generate_pdb(lib: &Library, dest_dir: &Path) -> Result<(), SyncErr
         maps.artworks.len(),
     );
 
-    Ok(())
+    Ok(pdb_skipped)
 }
 
 /// Build sequential ID maps for artists, albums, genres, keys, and labels from the track list.
@@ -206,6 +213,32 @@ fn create_pdb(rekordbox_dir: &Path) -> Result<Database<File>, SyncError> {
     )?)
 }
 
+/// Resolve all ID-map lookups for a single track, returning IDs in field order.
+fn resolve_track_ids(tv: &TrackView, maps: &IdMaps) -> (u32, u32, u32, u32, u32, u32, u32, u32) {
+    let artist_id = maps.artists.get(&tv.artist).copied().unwrap_or(0);
+    let album_id = maps
+        .albums
+        .get(&(tv.album.clone(), artist_id))
+        .copied()
+        .unwrap_or(0);
+    let genre_id = maps.genres.get(&tv.genre).copied().unwrap_or(0);
+    let key_id = maps.keys.get(&tv.key).copied().unwrap_or(0);
+    let label_id = maps.labels.get(&tv.label).copied().unwrap_or(0);
+    let composer_id = maps.artists.get(&tv.composer).copied().unwrap_or(0);
+    let remixer_id = maps.artists.get(&tv.remixer).copied().unwrap_or(0);
+    let artwork_id = maps.artworks.get(&tv.artwork_path).copied().unwrap_or(0);
+    (
+        artist_id,
+        album_id,
+        genre_id,
+        key_id,
+        label_id,
+        composer_id,
+        remixer_id,
+        artwork_id,
+    )
+}
+
 /// Insert track rows into the PDB, returning the number of successfully exported tracks.
 fn insert_tracks(
     pdb: &mut Database<File>,
@@ -213,6 +246,7 @@ fn insert_tracks(
     maps: &IdMaps,
     today: &str,
     dest_dir: &Path,
+    warnings: &super::SyncWarnings,
 ) -> Result<u32, SyncError> {
     let mut exported_count: u32 = 0;
 
@@ -222,46 +256,8 @@ fn insert_tracks(
         };
 
         let track_id = exported_count + 1;
-        let artist_id = if tv.artist.is_empty() {
-            0
-        } else {
-            maps.artists[&tv.artist]
-        };
-        let album_id = if tv.album.is_empty() {
-            0
-        } else {
-            maps.albums[&(tv.album.clone(), artist_id)]
-        };
-        let genre_id = if tv.genre.is_empty() {
-            0
-        } else {
-            maps.genres[&tv.genre]
-        };
-        let key_id = if tv.key.is_empty() {
-            0
-        } else {
-            maps.keys[&tv.key]
-        };
-        let label_id = if tv.label.is_empty() {
-            0
-        } else {
-            maps.labels[&tv.label]
-        };
-        let composer_id = if tv.composer.is_empty() {
-            0
-        } else {
-            maps.artists[&tv.composer]
-        };
-        let remixer_id = if tv.remixer.is_empty() {
-            0
-        } else {
-            maps.artists[&tv.remixer]
-        };
-        let artwork_id = if tv.artwork_path.is_empty() {
-            0
-        } else {
-            maps.artworks[&tv.artwork_path]
-        };
+        let (artist_id, album_id, genre_id, key_id, label_id, composer_id, remixer_id, artwork_id) =
+            resolve_track_ids(tv, maps);
 
         let (pioneer_path, filename, file_size) = resolve_device_file_info(file, dest_dir);
 
@@ -310,10 +306,9 @@ fn insert_tracks(
         match pdb.add_row(Row::Plain(PlainRow::Track(pdb_track))) {
             Ok(_) => exported_count += 1,
             Err(rekordcrate::Error::TrackRowTooSmall { .. }) => {
-                eprintln!(
-                    "  Warning: track '{}' skipped in PDB: row too small",
-                    file.file_path
-                );
+                let msg = format!("Track '{}' skipped in PDB: row too small", file.file_path);
+                eprintln!("  Warning: {msg}");
+                warnings.push(msg);
             }
             Err(err) => return Err(err.into()),
         }

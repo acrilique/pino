@@ -32,13 +32,14 @@ pub struct SyncResult {
     pub synced: u32,
     pub converted: u32,
     pub skipped: u32,
+    pub pdb_skipped: u32,
     pub updated: u32,
     pub warnings: Vec<String>,
 }
 
 impl std::fmt::Display for SyncResult {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        if self.synced == 0 && self.updated == 0 && self.skipped == 0 {
+        if self.synced == 0 && self.updated == 0 && self.skipped == 0 && self.pdb_skipped == 0 {
             return write!(f, "Everything is up to date.");
         }
         write!(f, "Synced {} track(s)", self.synced)?;
@@ -50,6 +51,9 @@ impl std::fmt::Display for SyncResult {
         }
         if self.skipped > 0 {
             write!(f, ", {} skipped (no matching format)", self.skipped)?;
+        }
+        if self.pdb_skipped > 0 {
+            write!(f, ", {} skipped (PDB row too small)", self.pdb_skipped)?;
         }
         write!(f, ".")
     }
@@ -112,11 +116,12 @@ pub fn sync(
     let updated = update_remote_metadata(&local_tracks, &remote_lib, &remote_tracks)?;
 
     if to_sync.is_empty() {
-        pdb::generate_pdb(&remote_lib, dest_dir)?;
+        let pdb_skipped = pdb::generate_pdb(&remote_lib, dest_dir, &warnings)?;
         return Ok(SyncResult {
             synced: 0,
             converted: 0,
             skipped: 0,
+            pdb_skipped,
             updated,
             warnings: warnings.into_vec(),
         });
@@ -156,12 +161,13 @@ pub fn sync(
         current: 0,
         total: 1,
     });
-    pdb::generate_pdb(&remote_lib, dest_dir)?;
+    let pdb_skipped = pdb::generate_pdb(&remote_lib, dest_dir, &warnings)?;
 
     Ok(SyncResult {
         synced,
         converted,
         skipped,
+        pdb_skipped,
         updated,
         warnings: warnings.into_vec(),
     })
