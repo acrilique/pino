@@ -72,6 +72,7 @@ pub enum SortKey {
     Rating,
     Color,
     AddedAt,
+    FileName,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -119,6 +120,7 @@ pub fn load_sort_prefs() -> (SortKey, SortOrder) {
         "rating" => SortKey::Rating,
         "color" => SortKey::Color,
         "added_at" => SortKey::AddedAt,
+        "file_name" => SortKey::FileName,
         _ => SortKey::Artist,
     };
     let order = match prefs.sort_order.as_str() {
@@ -152,6 +154,7 @@ pub fn save_sort_prefs(key: SortKey, order: SortOrder) {
         SortKey::Rating => "rating",
         SortKey::Color => "color",
         SortKey::AddedAt => "added_at",
+        SortKey::FileName => "file_name",
     }
     .to_string();
     prefs.sort_order = match order {
@@ -199,6 +202,7 @@ pub enum Column {
     Rating,
     Color,
     AddedAt,
+    FileName,
 }
 
 impl Column {
@@ -225,6 +229,7 @@ impl Column {
         Column::Rating,
         Column::Color,
         Column::AddedAt,
+        Column::FileName,
     ];
 
     /// Columns that are hidden unless the user previously toggled them.
@@ -246,6 +251,7 @@ impl Column {
         Column::Rating,
         Column::Color,
         Column::AddedAt,
+        Column::FileName,
     ];
 
     pub fn label(self) -> &'static str {
@@ -272,6 +278,7 @@ impl Column {
             Column::Rating => "Rating",
             Column::Color => "Color",
             Column::AddedAt => "Added At",
+            Column::FileName => "File Name",
         }
     }
 
@@ -299,6 +306,7 @@ impl Column {
             Column::Rating => "rating",
             Column::Color => "color",
             Column::AddedAt => "added_at",
+            Column::FileName => "file_name",
         }
     }
 
@@ -326,6 +334,7 @@ impl Column {
             "rating" => Some(Column::Rating),
             "color" => Some(Column::Color),
             "added_at" => Some(Column::AddedAt),
+            "file_name" => Some(Column::FileName),
             _ => None,
         }
     }

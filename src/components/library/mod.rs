@@ -43,6 +43,13 @@ fn format_duration(secs: u16) -> String {
     format!("{}:{:02}", secs / 60, secs % 60)
 }
 
+fn file_basename(path: &str) -> &str {
+    std::path::Path::new(path)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or(path)
+}
+
 const JS_TRACK_LIST_INIT: &str = include_str!("../../../assets/track-list.js");
 
 #[derive(Clone, PartialEq)]
@@ -108,6 +115,19 @@ pub fn Library(
                 SortKey::Rating => a.rating.cmp(&b.rating),
                 SortKey::Color => a.color.cmp(&b.color),
                 SortKey::AddedAt => a.added_at.cmp(&b.added_at),
+                SortKey::FileName => {
+                    let a_name = a
+                        .files
+                        .first()
+                        .map(|f| file_basename(&f.file_path))
+                        .unwrap_or_default();
+                    let b_name = b
+                        .files
+                        .first()
+                        .map(|f| file_basename(&f.file_path))
+                        .unwrap_or_default();
+                    a_name.to_lowercase().cmp(&b_name.to_lowercase())
+                }
             };
             match order {
                 SortOrder::Asc => cmp,
@@ -453,6 +473,9 @@ pub fn Library(
                             if !hidden_cols.read().contains(&Column::AddedAt) {
                                 SortableHeader { label: "Added At", col_key: SortKey::AddedAt, sort_key, sort_order, resizable: true }
                             }
+                            if !hidden_cols.read().contains(&Column::FileName) {
+                                SortableHeader { label: "File Name", col_key: SortKey::FileName, sort_key, sort_order, resizable: true }
+                            }
                         }
                     }
                     tbody {
@@ -737,6 +760,11 @@ pub fn Library(
                                             edit_value,
                                             on_commit: move |()| commit_edit(),
                                             hidden: hidden_cols.read().contains(&Column::AddedAt),
+                                        }
+                                        if !hidden_cols.read().contains(&Column::FileName) {
+                                            td {
+                                                "{twf.files.first().map(|f| file_basename(&f.file_path)).unwrap_or_default()}"
+                                            }
                                         }
                                     }
                                 }
