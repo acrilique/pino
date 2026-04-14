@@ -13,7 +13,10 @@ use std::{
 use anyhow::{Context as _, anyhow};
 use aoide::{
     CollectionUid,
-    api::{Pagination, track::search::Params as SearchParams},
+    api::{
+        Pagination,
+        track::search::{Filter, Params as SearchParams, PhraseFieldFilter},
+    },
     backend_embedded::{self, Environment},
     collection::{Collection, MediaSourceConfig},
     media::content::ContentPathConfig,
@@ -120,6 +123,34 @@ impl Library {
     pub fn all_tracks(&self) -> Result<Vec<TrackView>> {
         let flattened = self
             .all_entities()?
+            .into_iter()
+            .map(|entity| bridge::flatten(&entity))
+            .collect();
+        Ok(group_track_views(flattened))
+    }
+
+    /// Search tracks using aoide's phrase filter.
+    ///
+    /// An empty query returns all tracks. Non-empty queries are tokenised
+    /// by whitespace and matched case-insensitively against title, artist,
+    /// album, and other string fields via aoide's `PhraseFieldFilter`.
+    pub fn search_tracks(&self, query: &str) -> Result<Vec<TrackView>> {
+        let filter = build_phrase_filter(query);
+        let params = SearchParams {
+            filter,
+            ..SearchParams::default()
+        };
+        let entities = self.rt.block_on(async {
+            backend_embedded::track::search(
+                self.env.db_gatekeeper(),
+                self.collection_uid.clone(),
+                params,
+                Pagination::default(),
+            )
+            .await
+            .context("search tracks by query")
+        })?;
+        let flattened = entities
             .into_iter()
             .map(|entity| bridge::flatten(&entity))
             .collect();
@@ -732,4 +763,20 @@ fn append_import_summary_warnings(
 fn import_summary_count(summary: &aoide::api::track::replace::Summary) -> u32 {
     let imported = summary.created.len() + summary.updated.len() + summary.unchanged.len();
     u32::try_from(imported).unwrap_or(u32::MAX)
+}
+
+/// Build an aoide phrase filter from a search query string.
+///
+/// Tokens are split on whitespace. An empty query returns `None` (= match all).
+/// With `fields` left empty, aoide matches against all indexed string fields
+/// (title, artist, album, genre, comment, etc.).
+fn build_phrase_filter(query: &str) -> Option<Filter> {
+    let terms: Vec<String> = query.split_whitespace().map(String::from).collect();
+    if terms.is_empty() {
+        return None;
+    }
+    Some(Filter::Phrase(PhraseFieldFilter {
+        fields: vec![], // empty = search all string fields
+        terms,
+    }))
 }

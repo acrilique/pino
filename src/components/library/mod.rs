@@ -29,12 +29,23 @@ use rating_cell::RatingCell;
 use sortable_header::SortableHeader;
 
 pub fn refresh_tracks(tracks: &mut Signal<Vec<bridge::TrackView>>) {
+    refresh_tracks_with_query(tracks, "");
+}
+
+pub fn refresh_tracks_with_query(tracks: &mut Signal<Vec<bridge::TrackView>>, query: &str) {
     let lib = dioxus::prelude::consume_context::<Arc<Lib>>();
     let mut tracks = *tracks;
+    let query = query.to_owned();
     spawn(async move {
-        let t = spawn_blocking(move || lib.all_tracks().unwrap_or_default())
-            .await
-            .unwrap_or_default();
+        let t = spawn_blocking(move || {
+            if query.is_empty() {
+                lib.all_tracks().unwrap_or_default()
+            } else {
+                lib.search_tracks(&query).unwrap_or_default()
+            }
+        })
+        .await
+        .unwrap_or_default();
         tracks.set(t);
     });
 }
@@ -78,6 +89,7 @@ pub fn Library(
     mut scanning: Signal<bool>,
     sort_key: Signal<SortKey>,
     sort_order: Signal<SortOrder>,
+    mut search_query: Signal<String>,
     on_sync: EventHandler,
 ) -> Element {
     let mut editing = use_signal(|| None::<(String, EditColumn)>);
@@ -264,6 +276,7 @@ pub fn Library(
                                 import_warnings.set(r.warnings);
                             }
                             if r.imported > 0 {
+                                search_query.set(String::new());
                                 refresh_tracks(&mut tracks);
                             }
                         }
@@ -311,6 +324,7 @@ pub fn Library(
                                 import_warnings.set(r.warnings);
                             }
                             if r.imported > 0 {
+                                search_query.set(String::new());
                                 refresh_tracks(&mut tracks);
                             }
                         }
@@ -355,6 +369,21 @@ pub fn Library(
             }
             p { class: "track-count",
                 if scanning() { "Scanning..." } else { "{tracks.read().len()} track(s) in library" }
+            }
+        }
+
+        // Search input
+        div { class: "search-bar",
+            input {
+                class: "input search-input",
+                r#type: "text",
+                placeholder: "Search tracks…",
+                value: "{search_query}",
+                oninput: move |e: FormEvent| {
+                    let q = e.value();
+                    search_query.set(q.clone());
+                    refresh_tracks_with_query(&mut tracks, &q);
+                },
             }
         }
 

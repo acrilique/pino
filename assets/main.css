@@ -376,7 +376,14 @@ input[type="checkbox"] {
     margin-left: auto;
 }
 
+.search-bar {
+    margin-bottom: 8px;
+}
 
+.search-input {
+    width: 100%;
+    font-size: 13px;
+}
 
 .track-list {
     overflow-y: auto;
