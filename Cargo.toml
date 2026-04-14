@@ -24,6 +24,9 @@ dioxus-primitives = { git = "https://github.com/DioxusLabs/components", version 
 uuid = { version = "1", features = ["v4"] }
 rayon = "1"
 
+[patch.crates-io]
+lofty = { git = "https://github.com/acrilique/lofty-rs", branch = "main" }
+
 [lints.clippy]
 all = "warn"
 pedantic = "warn"
