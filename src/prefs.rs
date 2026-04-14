@@ -73,6 +73,7 @@ pub enum SortKey {
     Color,
     AddedAt,
     FileName,
+    Tags,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -121,6 +122,7 @@ pub fn load_sort_prefs() -> (SortKey, SortOrder) {
         "color" => SortKey::Color,
         "added_at" => SortKey::AddedAt,
         "file_name" => SortKey::FileName,
+        "tags" => SortKey::Tags,
         _ => SortKey::Artist,
     };
     let order = match prefs.sort_order.as_str() {
@@ -155,6 +157,7 @@ pub fn save_sort_prefs(key: SortKey, order: SortOrder) {
         SortKey::Color => "color",
         SortKey::AddedAt => "added_at",
         SortKey::FileName => "file_name",
+        SortKey::Tags => "tags",
     }
     .to_string();
     prefs.sort_order = match order {
@@ -203,6 +206,7 @@ pub enum Column {
     Color,
     AddedAt,
     FileName,
+    Tags,
 }
 
 impl Column {
@@ -230,6 +234,7 @@ impl Column {
         Column::Color,
         Column::AddedAt,
         Column::FileName,
+        Column::Tags,
     ];
 
     /// Columns that are hidden unless the user previously toggled them.
@@ -252,6 +257,7 @@ impl Column {
         Column::Color,
         Column::AddedAt,
         Column::FileName,
+        Column::Tags,
     ];
 
     pub fn label(self) -> &'static str {
@@ -279,6 +285,7 @@ impl Column {
             Column::Color => "Color",
             Column::AddedAt => "Added At",
             Column::FileName => "File Name",
+            Column::Tags => "Tags",
         }
     }
 
@@ -307,6 +314,7 @@ impl Column {
             Column::Color => "color",
             Column::AddedAt => "added_at",
             Column::FileName => "file_name",
+            Column::Tags => "tags",
         }
     }
 
@@ -335,6 +343,7 @@ impl Column {
             "color" => Some(Column::Color),
             "added_at" => Some(Column::AddedAt),
             "file_name" => Some(Column::FileName),
+            "tags" => Some(Column::Tags),
             _ => None,
         }
     }

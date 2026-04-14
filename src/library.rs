@@ -10,7 +10,7 @@ use std::{
     path::Path,
 };
 
-use anyhow::{Context as _, anyhow};
+use anyhow::{Context, anyhow};
 use aoide::{
     CollectionUid,
     api::{
@@ -214,7 +214,7 @@ impl Library {
                 resolve_path_from_url: false,
                 preserve_collected_at: true,
                 update_last_synchronized_rev: false,
-                decode_gigtags: false,
+                decode_gigtags: true,
             };
 
             backend_embedded::track::replace_many_by_media_source_content_path(
@@ -368,7 +368,7 @@ impl Library {
             resolve_path_from_url: false,
             preserve_collected_at: true,
             update_last_synchronized_rev: true,
-            decode_gigtags: false,
+            decode_gigtags: true,
         };
 
         // One batch call for all validated tracks.
@@ -431,7 +431,7 @@ impl Library {
                 resolve_path_from_url: false,
                 preserve_collected_at: true,
                 update_last_synchronized_rev: false,
-                decode_gigtags: false,
+                decode_gigtags: true,
             };
 
             backend_embedded::track::replace_many_by_media_source_content_path(
@@ -487,7 +487,7 @@ impl Library {
                 resolve_path_from_url: false,
                 preserve_collected_at: true,
                 update_last_synchronized_rev: false,
-                decode_gigtags: false,
+                decode_gigtags: true,
             };
 
             backend_embedded::track::replace_many_by_media_source_content_path(
@@ -595,7 +595,7 @@ impl Library {
                 resolve_path_from_url: false,
                 preserve_collected_at: true,
                 update_last_synchronized_rev: false,
-                decode_gigtags: false,
+                decode_gigtags: true,
             };
 
             backend_embedded::track::replace_many_by_media_source_content_path(

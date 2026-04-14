@@ -11,6 +11,7 @@ mod color_cell;
 mod editable_cell;
 mod rating_cell;
 mod sortable_header;
+mod tag_cell;
 
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -27,6 +28,7 @@ pub use editable_cell::EditColumn;
 use editable_cell::EditableCell;
 use rating_cell::RatingCell;
 use sortable_header::SortableHeader;
+use tag_cell::TagCell;
 
 pub fn refresh_tracks(tracks: &mut Signal<Vec<bridge::TrackView>>) {
     refresh_tracks_with_query(tracks, "");
@@ -144,6 +146,11 @@ pub fn Library(
                         .unwrap_or_default();
                     a_name.to_lowercase().cmp(&b_name.to_lowercase())
                 }
+                SortKey::Tags => {
+                    let a_tags = a.tags.join(", ").to_lowercase();
+                    let b_tags = b.tags.join(", ").to_lowercase();
+                    a_tags.cmp(&b_tags)
+                }
             };
             match order {
                 SortOrder::Asc => cmp,
@@ -254,6 +261,20 @@ pub fn Library(
                     lib.update_track(&track_id, &TrackField::Color(new_val))
                 })
                 .await;
+            });
+        }
+    };
+
+    let mut update_tags = move |track_id: String, new_val: Vec<String>| {
+        let mut w = tracks.write();
+        if let Some(twf) = w.iter_mut().find(|t| t.id == track_id) {
+            twf.tags.clone_from(&new_val);
+            drop(w);
+            let lib = consume_context::<Arc<Lib>>();
+            spawn(async move {
+                let _ =
+                    spawn_blocking(move || lib.update_track(&track_id, &TrackField::Tags(new_val)))
+                        .await;
             });
         }
     };
@@ -545,6 +566,9 @@ pub fn Library(
                             if !hidden_cols.read().contains(&Column::FileName) {
                                 SortableHeader { label: "File Name", col_key: SortKey::FileName, sort_key, sort_order, resizable: true }
                             }
+                            if !hidden_cols.read().contains(&Column::Tags) {
+                                SortableHeader { label: "Tags", col_key: SortKey::Tags, sort_key, sort_order, resizable: true }
+                            }
                         }
                     }
                     tbody {
@@ -834,6 +858,15 @@ pub fn Library(
                                             td {
                                                 "{twf.files.first().map(|f| file_basename(&f.file_path)).unwrap_or_default()}"
                                             }
+                                        }
+                                        TagCell {
+                                            track_id: track_id.clone(),
+                                            tags: twf.tags.clone(),
+                                            on_change: {
+                                                let tid = track_id.clone();
+                                                move |v: Vec<String>| update_tags(tid.clone(), v)
+                                            },
+                                            hidden: hidden_cols.read().contains(&Column::Tags),
                                         }
                                     }
                                 }

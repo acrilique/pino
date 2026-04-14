@@ -11,13 +11,17 @@ use super::{SyncError, device_relative_path, today};
 use crate::bridge::TrackView;
 use crate::format::SupportedFormat;
 use crate::library::Library;
+use rekordcrate::pdb::ext::{
+    ExtPageType, ExtRow, ParentId, TagId, TagOrCategory, TagOrCategoryStrings, TrackTag,
+};
 use rekordcrate::pdb::io::Database;
+use rekordcrate::pdb::offset_array::OffsetArrayContainer;
 use rekordcrate::pdb::string::DeviceSQLString;
 use rekordcrate::pdb::{
     Album, Artist, Artwork, DatabaseType, Genre, History, Key, Label, PageType, PlainPageType,
     PlainRow, Row, Subtype,
 };
-use rekordcrate::util::ColorIndex;
+use rekordcrate::util::{ColorIndex, MaybeCalculated};
 use std::collections::HashMap;
 use std::fs::File;
 use std::path::Path;
@@ -492,4 +496,128 @@ fn color_index_from_u8(value: u8) -> ColorIndex {
         8 => ColorIndex::Purple,
         _ => ColorIndex::None,
     }
+}
+
+// ── exportExt.pdb (Tags) ────────────────────────────────────────
+
+/// Generate a Pioneer extended PDB (`exportExt.pdb`) with tag/track-tag associations.
+///
+/// Tags are extracted from the unfaceted plain tags on each track (gigtag-decoded hashtags).
+/// A single "My Tags" category is created, with every unique tag label as a child tag.
+pub(super) fn generate_ext_pdb(lib: &Library, dest_dir: &Path) -> Result<(), SyncError> {
+    let all = lib
+        .all_tracks()
+        .map_err(|e| SyncError::Other(e.to_string()))?;
+
+    // Collect unique tag labels → sequential IDs.
+    // ID 1 is reserved for the "My Tags" category.
+    let mut tag_map: HashMap<String, u32> = HashMap::new();
+    let mut next_tag_id: u32 = 2;
+    for tv in &all {
+        for label in &tv.tags {
+            if !label.is_empty() && !tag_map.contains_key(label) {
+                tag_map.insert(label.clone(), next_tag_id);
+                next_tag_id += 1;
+            }
+        }
+    }
+
+    if tag_map.is_empty() {
+        // No tags anywhere — skip ext PDB entirely.
+        return Ok(());
+    }
+
+    let rekordbox_dir = dest_dir.join("PIONEER").join("rekordbox");
+    std::fs::create_dir_all(&rekordbox_dir)?;
+
+    let table_page_types = vec![
+        PageType::Ext(ExtPageType::Tag),
+        PageType::Ext(ExtPageType::TrackTag),
+    ];
+    let ext_path = rekordbox_dir.join("exportExt.pdb");
+    let ext_file = File::create(&ext_path)?;
+    let mut ext_db = Database::create(ext_file, DatabaseType::Ext, &table_page_types)?;
+
+    // Insert "My Tags" category (id = 1).
+    let category = TagOrCategory {
+        subtype: Subtype(0x0680),
+        index_shift: 0,
+        unknown1: 0,
+        unknown2: 0,
+        parent_id: ParentId(None),
+        position: 0,
+        id: TagId(1),
+        raw_is_category: 1,
+        offsets: OffsetArrayContainer {
+            offsets: MaybeCalculated::Calculated,
+            inner: TagOrCategoryStrings {
+                name: "My Tags".parse()?,
+                unknown: DeviceSQLString::empty(),
+            },
+        },
+    };
+    ext_db.add_row(Row::Ext(ExtRow::Tag(category)))?;
+
+    // Insert individual tags under the category, sorted by ID for deterministic output.
+    let mut tags_sorted: Vec<_> = tag_map.iter().collect();
+    tags_sorted.sort_by_key(|(_, id)| **id);
+    for (position, (label, id)) in tags_sorted.iter().enumerate() {
+        let tag = TagOrCategory {
+            subtype: Subtype(0x0680),
+            index_shift: 0,
+            unknown1: 0,
+            unknown2: 0,
+            parent_id: ParentId(std::num::NonZero::new(1)),
+            position: u32::try_from(position).unwrap_or(u32::MAX),
+            id: TagId(**id),
+            raw_is_category: 0,
+            offsets: OffsetArrayContainer {
+                offsets: MaybeCalculated::Calculated,
+                inner: TagOrCategoryStrings {
+                    name: label.parse()?,
+                    unknown: DeviceSQLString::empty(),
+                },
+            },
+        };
+        ext_db.add_row(Row::Ext(ExtRow::Tag(tag)))?;
+    }
+
+    // Build track-ID map: track_view index (1-based) → PDB track ID.
+    // PDB track IDs are 1-based sequential, matching `insert_tracks` in `generate_pdb`.
+    let mut exported_idx: u32 = 0;
+    let mut track_id_map: HashMap<usize, u32> = HashMap::new();
+    for (idx, tv) in all.iter().enumerate() {
+        if tv.files.is_empty() {
+            continue;
+        }
+        if let Ok(fmt) = SupportedFormat::try_from(tv.files[0].format.as_str()) {
+            let _ = fmt;
+            exported_idx += 1;
+            track_id_map.insert(idx, exported_idx);
+        }
+    }
+
+    // Insert track-tag junction rows.
+    for (idx, tv) in all.iter().enumerate() {
+        let Some(&pdb_track_id) = track_id_map.get(&idx) else {
+            continue;
+        };
+        for label in &tv.tags {
+            if let Some(&tag_id) = tag_map.get(label) {
+                let track_tag = TrackTag {
+                    track_id: rekordcrate::pdb::TrackId(pdb_track_id),
+                    tag_id: TagId(tag_id),
+                    unknown_const: 3,
+                };
+                ext_db.add_row(Row::Ext(ExtRow::TrackTag(track_tag)))?;
+            }
+        }
+    }
+
+    ext_db.close()?;
+
+    let tag_count = tag_map.len();
+    println!("Ext PDB: {tag_count} tag(s) in 1 category");
+
+    Ok(())
 }

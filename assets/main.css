@@ -812,3 +812,79 @@ input[type="checkbox"] {
 .pull-btn:disabled:hover {
     background: var(--bg-elevated);
 }
+
+/* ── Tag cell / chip styles ─────────────────────────────── */
+
+.tag-cell {
+    cursor: text;
+}
+
+.tag-cell:hover {
+    background: var(--bg-elevated);
+}
+
+.tag-cell.editing {
+    padding: 2px 4px;
+    background: var(--bg-surface);
+}
+
+.tag-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    align-items: center;
+}
+
+.tag-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-default);
+    border-radius: 10px;
+    padding: 1px 8px;
+    font-size: 11px;
+    line-height: 1.4;
+    white-space: nowrap;
+    max-width: 140px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.tag-chip.readonly {
+    cursor: default;
+}
+
+.tag-remove {
+    appearance: none;
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    font-size: 13px;
+    line-height: 1;
+    padding: 0 0 0 2px;
+}
+
+.tag-remove:hover {
+    color: var(--text-body);
+}
+
+.tag-input {
+    appearance: none;
+    -webkit-appearance: none;
+    background: transparent;
+    border: none;
+    color: var(--text-body);
+    font-size: 11px;
+    font-family: inherit;
+    outline: none;
+    min-width: 60px;
+    width: 60px;
+    padding: 2px 0;
+}
+
+.tag-placeholder {
+    display: inline-block;
+    min-height: 1.2em;
+}

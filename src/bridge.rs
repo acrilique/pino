@@ -61,6 +61,7 @@ pub struct TrackView {
     pub color: u8,
     pub artwork_path: String,
     pub added_at: String,
+    pub tags: Vec<String>,
     pub files: Vec<TrackFileView>,
 }
 
@@ -96,6 +97,7 @@ pub enum TrackField {
     DiscNumber(u16),
     Rating(u8),
     Color(u8),
+    Tags(Vec<String>),
 }
 
 // ── Flatten: Entity → TrackView ──────────────────────────────────
@@ -156,6 +158,7 @@ pub fn flatten(entity: &Entity) -> TrackView {
             _ => String::new(),
         },
         added_at,
+        tags: plain_tags(track),
         files: vec![TrackFileView {
             format: format_from_path(file_path),
             file_size: std::fs::metadata(file_path)
@@ -196,6 +199,7 @@ pub fn apply_view(track: &mut track::Track, view: &TrackView) {
     apply_track_field(track, TrackField::DiscNumber(view.disc_number));
     apply_track_field(track, TrackField::Rating(view.rating));
     apply_track_field(track, TrackField::Color(view.color));
+    apply_track_field(track, TrackField::Tags(view.tags.clone()));
 }
 
 /// Return logical Pino track ID, falling back to aoide's entity UID.
@@ -291,10 +295,36 @@ fn apply_track_field(track: &mut track::Track, field: TrackField) {
             };
         }
         TrackField::MixName(v) => set_sub_title(track, v),
+        TrackField::Tags(v) => set_plain_tags(track, v),
     }
 }
 
 // ── Helpers ──────────────────────────────────────────────────────
+
+/// Extract labels from unfaceted plain tags (gigtag-decoded hashtags).
+fn plain_tags(track: &track::Track) -> Vec<String> {
+    track
+        .tags
+        .plain
+        .iter()
+        .filter_map(|pt| pt.label.as_ref())
+        .map(|l| l.as_str().to_owned())
+        .collect()
+}
+
+/// Replace all unfaceted plain tags with the given labels.
+fn set_plain_tags(track: &mut track::Track, labels: Vec<String>) {
+    let mut tags = std::mem::take(&mut track.tags).untie();
+    tags.plain = labels
+        .into_iter()
+        .filter(|l| !l.is_empty())
+        .map(|l| PlainTag {
+            label: Some(Label::from_unchecked(l)),
+            score: Score::default(),
+        })
+        .collect();
+    track.tags = tags.canonicalize_into();
+}
 
 /// Extract first label from a faceted tag group.
 fn facet_label(track: &track::Track, facet_id: &FacetId) -> String {

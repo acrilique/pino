@@ -226,6 +226,9 @@
     border-style: var(--tw-border-style);
     border-width: 1px;
   }
+  .underline {
+    text-decoration-line: underline;
+  }
   .outline {
     outline-style: var(--tw-outline-style);
     outline-width: 1px;

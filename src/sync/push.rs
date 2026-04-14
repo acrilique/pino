@@ -118,6 +118,7 @@ pub fn sync(
 
     if to_sync.is_empty() {
         let pdb_skipped = pdb::generate_pdb(&remote_lib, dest_dir, &warnings)?;
+        pdb::generate_ext_pdb(&remote_lib, dest_dir)?;
         return Ok(SyncResult {
             synced: 0,
             converted: 0,
@@ -163,6 +164,7 @@ pub fn sync(
         total: 1,
     });
     let pdb_skipped = pdb::generate_pdb(&remote_lib, dest_dir, &warnings)?;
+    pdb::generate_ext_pdb(&remote_lib, dest_dir)?;
 
     Ok(SyncResult {
         synced,
@@ -220,6 +222,7 @@ fn metadata_differs(local: &TrackView, remote: &TrackView) -> bool {
         || local.disc_number != remote.disc_number
         || local.rating != remote.rating
         || local.color != remote.color
+        || local.tags != remote.tags
 }
 
 /// For each track to sync, pick the best source file, assign a destination filename,
