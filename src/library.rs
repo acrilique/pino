@@ -227,7 +227,14 @@ impl Library {
             .context("replace tracks after edit")?;
 
             Ok(())
-        })
+        })?;
+
+        // Best-effort: write updated metadata back into audio file tags.
+        if let Err(e) = self.export_track_metadata(&track_id) {
+            eprintln!("metadata export after edit failed for {track_id}: {e}");
+        }
+
+        Ok(())
     }
 
     /// Delete every file variant of a logical track by its stable track ID.
@@ -444,7 +451,14 @@ impl Library {
             .context("replace tracks after overwrite")?;
 
             Ok(())
-        })
+        })?;
+
+        // Best-effort: write updated metadata back into audio file tags.
+        if let Err(e) = self.export_track_metadata(&track_id) {
+            eprintln!("metadata export after overwrite failed for {track_id}: {e}");
+        }
+
+        Ok(())
     }
 
     /// Reassign logical track ID for every file variant in a grouped track.
@@ -501,6 +515,46 @@ impl Library {
 
             Ok(())
         })
+    }
+
+    /// Write DB metadata back into the audio file tags for every file variant
+    /// of the logical track identified by `track_id`.
+    ///
+    /// Returns `(exported_count, warnings)`.
+    pub fn export_track_metadata(&self, track_id: &str) -> Result<(u32, Vec<String>)> {
+        use aoide::media_file::io::export::{ExportTrackConfig, export_track_to_file_path};
+
+        let entities = self
+            .all_entities()?
+            .into_iter()
+            .filter(|entity| bridge::track_id(entity) == track_id)
+            .collect::<Vec<_>>();
+
+        if entities.is_empty() {
+            return Err(anyhow!("track not found: {track_id}"));
+        }
+
+        let config = ExportTrackConfig::default();
+        let mut exported = 0u32;
+        let mut warnings = Vec::new();
+
+        for entity in entities {
+            let mut track = entity.body.track.clone();
+            let file_path = track.media_source.content.link.path.as_str().to_owned();
+            let path = std::path::PathBuf::from(&file_path);
+
+            if !path.exists() {
+                warnings.push(format!("{file_path}: file not found, skipped"));
+                continue;
+            }
+
+            match export_track_to_file_path(&path, &config, &mut track, None) {
+                Ok(()) => exported += 1,
+                Err(e) => warnings.push(format!("{file_path}: export failed ({e})")),
+            }
+        }
+
+        Ok((exported, warnings))
     }
 }
 
