@@ -20,7 +20,7 @@ use dioxus_core::Task;
 
 use crate::bridge::{self, TrackField};
 use crate::library::Library as Lib;
-use crate::prefs::{self, Column, SortKey, SortOrder};
+use crate::prefs::{self, Column, DEFAULT_PAGE_SIZE, SortKey, SortOrder};
 use crate::sync;
 use crate::task::{self, spawn_blocking};
 use dioxus::prelude::*;
@@ -103,6 +103,16 @@ pub fn Library(
     let mut hidden_cols = use_signal(prefs::load_hidden_columns);
     let mut selected_tracks: Signal<HashSet<String>> = use_signal(HashSet::new);
     let mut last_clicked: Signal<Option<String>> = use_signal(|| None);
+
+    let mut visible_count = use_signal(prefs::load_page_size);
+
+    // Reset visible count when sort or track list changes.
+    use_effect(move || {
+        let _ = sort_key();
+        let _ = sort_order();
+        let _ = tracks.read().len();
+        visible_count.set(prefs::load_page_size());
+    });
 
     let progress_phase = use_signal(String::new);
     let progress_current = use_signal(|| 0u32);
@@ -443,6 +453,7 @@ pub fn Library(
                 placeholder: "Search tracks…",
                 oninput: move |e: FormEvent| {
                     let q = e.value();
+                    visible_count.set(prefs::load_page_size());
                     if let Some(task) = debounce_task.take() {
                         Task::cancel(task);
                     }
@@ -486,6 +497,27 @@ pub fn Library(
                 id: "track-list",
                 onmounted: |_| {
                     document::eval(JS_TRACK_LIST_INIT);
+                },
+                onscroll: move |_| {
+                    // Load more rows when scrolled near bottom.
+                    let total = sorted_tracks.read().len();
+                    let current = visible_count();
+                    if current < total {
+                        let fut = document::eval(
+                            r"let el = document.getElementById('track-list');
+                               el ? (el.scrollTop + el.clientHeight >= el.scrollHeight - 200) : false",
+                        );
+                        spawn(async move {
+                            if let Ok(near_bottom) = fut.await
+                                && near_bottom == true {
+                                    let n = visible_count();
+                                    let t = sorted_tracks.read().len();
+                                    if n < t {
+                                        visible_count.set((n + DEFAULT_PAGE_SIZE).min(t));
+                                    }
+                                }
+                        });
+                    }
                 },
                 table {
                     thead {
@@ -579,7 +611,7 @@ pub fn Library(
                         }
                     }
                     tbody {
-                        for (row_idx, twf) in sorted_tracks().into_iter().enumerate() {
+                        for (row_idx, twf) in sorted_tracks().into_iter().take(visible_count()).enumerate() {
                             {
                                 let track_id = twf.id.clone();
                                 let is_selected = selected_tracks.read().contains(&track_id);

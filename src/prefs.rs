@@ -16,6 +16,8 @@ const PREFS_FILE: &str = "prefs.toml";
 
 // ── Serialized prefs ──────────────────────────────────────────────────────────
 
+pub const DEFAULT_PAGE_SIZE: usize = 100;
+
 #[derive(Serialize, Deserialize, Default)]
 struct Prefs {
     #[serde(rename = "sortKey", default)]
@@ -28,6 +30,8 @@ struct Prefs {
     dest_dir: String,
     #[serde(rename = "hiddenColumns", default)]
     hidden_columns: Vec<String>,
+    #[serde(rename = "pageSize", default)]
+    page_size: usize,
 }
 
 impl Prefs {
@@ -367,4 +371,11 @@ pub fn save_hidden_columns(hidden: &HashSet<Column>) {
     let mut prefs = Prefs::load();
     prefs.hidden_columns = hidden.iter().map(|c| c.as_str().to_string()).collect();
     prefs.save();
+}
+
+// ── Page size ─────────────────────────────────────────────────────────────────
+
+pub fn load_page_size() -> usize {
+    let size = Prefs::load().page_size;
+    if size > 0 { size } else { DEFAULT_PAGE_SIZE }
 }
