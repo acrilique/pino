@@ -208,6 +208,7 @@ pub fn Library(
                     twf.disc_number = new_val.parse().unwrap_or(twf.disc_number);
                 }
                 EditColumn::AddedAt => twf.added_at.clone_from(&new_val),
+                EditColumn::Tags => return, // tags are committed by TagCell directly
             }
             let track_uid = twf.id.clone();
             drop(w);
@@ -230,7 +231,7 @@ pub fn Library(
                 EditColumn::Year => TrackField::Year(new_val.parse().unwrap_or(0)),
                 EditColumn::TrackNumber => TrackField::TrackNumber(new_val.parse().unwrap_or(0)),
                 EditColumn::DiscNumber => TrackField::DiscNumber(new_val.parse().unwrap_or(0)),
-                EditColumn::AddedAt => return, // added_at not editable via aoide
+                EditColumn::AddedAt | EditColumn::Tags => return, // added_at not editable via aoide, tags are committed by TagCell directly
             };
 
             let scroll_id = track_uid.clone();
@@ -901,6 +902,7 @@ pub fn Library(
                                         TagCell {
                                             track_id: track_id.clone(),
                                             tags: twf.tags.clone(),
+                                            editing,
                                             on_change: {
                                                 let tid = track_id.clone();
                                                 move |v: Vec<String>| update_tags(tid.clone(), v)

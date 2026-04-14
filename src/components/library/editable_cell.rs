@@ -29,6 +29,7 @@ pub enum EditColumn {
     TrackNumber,
     DiscNumber,
     AddedAt,
+    Tags,
 }
 
 impl EditColumn {
@@ -86,6 +87,7 @@ pub fn EditableCell(
         EditColumn::TrackNumber => "track_number",
         EditColumn::DiscNumber => "disc_number",
         EditColumn::AddedAt => "added_at",
+        EditColumn::Tags => "tags",
     };
     let input_id = format!("edit-{track_id}-{col_suffix}");
 

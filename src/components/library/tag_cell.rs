@@ -7,6 +7,7 @@
 //
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+use super::editable_cell::EditColumn;
 use dioxus::prelude::*;
 
 /// Chip/pill tag editor cell for the track table.
@@ -18,6 +19,7 @@ use dioxus::prelude::*;
 pub fn TagCell(
     track_id: String,
     tags: Vec<String>,
+    mut editing: Signal<Option<(String, EditColumn)>>,
     on_change: EventHandler<Vec<String>>,
     #[props(default)] hidden: bool,
 ) -> Element {
@@ -25,10 +27,14 @@ pub fn TagCell(
         return rsx! {};
     }
 
-    let mut is_editing = use_signal(|| false);
     let mut draft = use_signal(String::new);
     let mut local_tags = use_signal(|| tags.clone());
     let input_id = format!("tags-{track_id}");
+
+    let is_editing = editing
+        .read()
+        .as_ref()
+        .is_some_and(|(id, col)| id == &track_id && *col == EditColumn::Tags);
 
     // Sync external tags when they change (e.g. after undo or refresh).
     use_effect(use_reactive!(|tags| {
@@ -53,7 +59,7 @@ pub fn TagCell(
         on_change.call(local_tags());
     };
 
-    if is_editing() {
+    if is_editing {
         rsx! {
             td { class: "tag-cell editing",
                 onclick: move |e: MouseEvent| e.stop_propagation(),
@@ -104,7 +110,7 @@ pub fn TagCell(
                                 e.prevent_default();
                                 commit_tag();
                             } else if e.key() == Key::Escape {
-                                is_editing.set(false);
+                                editing.set(None);
                                 draft.set(String::new());
                             } else if e.key() == Key::Backspace && draft().is_empty() {
                                 let mut t = local_tags.write();
@@ -117,7 +123,7 @@ pub fn TagCell(
                         },
                         onblur: move |_| {
                             commit_tag();
-                            is_editing.set(false);
+                            editing.set(None);
                         },
                     }
                 }
@@ -125,11 +131,12 @@ pub fn TagCell(
         }
     } else {
         let focus_id = input_id.clone();
+        let tid = track_id.clone();
         rsx! {
             td {
                 class: "tag-cell editable-cell",
                 onclick: move |_| {
-                    is_editing.set(true);
+                    editing.set(Some((tid.clone(), EditColumn::Tags)));
                     let js = format!(
                         "setTimeout(() => {{ const el = document.getElementById('{focus_id}'); if (el) el.focus(); }}, 0)"
                     );
