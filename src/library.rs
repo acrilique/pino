@@ -282,7 +282,12 @@ impl Library {
     ///
     /// Skips files whose content path is already in the collection.
     /// Returns `(imported_count, warnings)`.
-    pub fn import_files(&self, paths: &[std::path::PathBuf]) -> Result<(u32, Vec<String>)> {
+    /// Import audio files with an optional progress callback `(current, total)`.
+    pub fn import_files_with_progress(
+        &self,
+        paths: &[std::path::PathBuf],
+        on_progress: Option<&(dyn Fn(u32, u32) + Sync)>,
+    ) -> Result<(u32, Vec<String>)> {
         let requests = paths
             .iter()
             .map(|path| ImportRequest {
@@ -293,7 +298,7 @@ impl Library {
             })
             .collect();
 
-        self.import_requests(requests)
+        self.import_requests(requests, on_progress)
     }
 
     /// Import one audio file as another file variant of an existing logical track.
@@ -304,105 +309,53 @@ impl Library {
         stored_path: Option<String>,
         metadata: &TrackView,
     ) -> Result<(u32, Vec<String>)> {
-        self.import_requests(vec![ImportRequest {
-            source_path: source_path.to_path_buf(),
-            track_id: track_id.to_owned(),
-            stored_path,
-            metadata: Some(metadata.clone()),
-        }])
+        self.import_requests(
+            vec![ImportRequest {
+                source_path: source_path.to_path_buf(),
+                track_id: track_id.to_owned(),
+                stored_path,
+                metadata: Some(metadata.clone()),
+            }],
+            None,
+        )
     }
 
-    fn import_requests(&self, requests: Vec<ImportRequest>) -> Result<(u32, Vec<String>)> {
-        use aoide::media::content::{ContentLink, ContentPath, ContentRevision};
-        use aoide::media_file::{
-            io::import::{ImportTrack, ImportTrackConfig, import_into_track},
-            util::guess_mime_from_file_path,
-        };
-        use aoide::util::clock::OffsetDateTimeMs;
-        use std::io::BufReader;
+    fn import_requests(
+        &self,
+        requests: Vec<ImportRequest>,
+        on_progress: Option<&(dyn Fn(u32, u32) + Sync)>,
+    ) -> Result<(u32, Vec<String>)> {
+        use aoide::media_file::io::import::ImportTrackConfig;
+        use rayon::iter::{IntoParallelIterator, ParallelIterator};
 
         let config = ImportTrackConfig::default();
-        let mut warnings = Vec::new();
 
         // Load all existing content paths once to avoid O(n) full-table scans.
-        let mut existing_paths = self.existing_content_paths()?;
+        let existing_paths = self.existing_content_paths()?;
+
+        let total = u32::try_from(requests.len()).unwrap_or(u32::MAX);
+        let processed = std::sync::atomic::AtomicU32::new(0);
+
+        // Read metadata in parallel across all available cores.
+        let results: Vec<_> = requests
+            .into_par_iter()
+            .map(|request| {
+                let outcome = process_single_import(&request, &existing_paths, &config);
+                let done = processed.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+                if let Some(cb) = on_progress {
+                    cb(done, total);
+                }
+                outcome
+            })
+            .collect();
+
+        let mut warnings = Vec::new();
         let mut validated_batch = Vec::new();
-
-        for request in requests {
-            // Canonicalize and open.
-            let canonical = match request.source_path.canonicalize() {
-                Ok(p) => p,
-                Err(e) => {
-                    warnings.push(format!("{}: {e}", request.source_path.display()));
-                    continue;
-                }
-            };
-            let stored_path = request
-                .stored_path
-                .unwrap_or_else(|| canonical.to_string_lossy().into_owned());
-
-            if existing_paths.contains(&stored_path) {
-                continue;
-            }
-
-            let file = match std::fs::File::open(&canonical) {
-                Ok(f) => f,
-                Err(e) => {
-                    warnings.push(format!("{}: {e}", canonical.display()));
-                    continue;
-                }
-            };
-
-            // Content link (absolute path as content path, file mod-time as revision).
-            let content_rev = ContentRevision::try_from_file(&file).ok().flatten();
-            let content_path = ContentPath::new(std::borrow::Cow::Owned(stored_path.clone()));
-            let content_link = ContentLink {
-                path: content_path,
-                rev: content_rev,
-            };
-
-            // MIME type.
-            let content_type = match guess_mime_from_file_path(&canonical) {
-                Ok(m) => m,
-                Err(e) => {
-                    warnings.push(format!("{}: unsupported format ({e})", canonical.display()));
-                    continue;
-                }
-            };
-
-            // Build a new Track skeleton, then import metadata from the file.
-            let import_track = ImportTrack::NewTrack {
-                collected_at: OffsetDateTimeMs::now_local(),
-            };
-            let mut track = import_track.with_content(content_link, content_type);
-
-            let mut reader: Box<dyn aoide::media_file::io::import::Reader> =
-                Box::new(BufReader::new(file));
-            if let Err(e) = import_into_track(&mut reader, &config, &mut track) {
-                warnings.push(format!(
-                    "{}: metadata import failed ({e})",
-                    canonical.display()
-                ));
-                continue;
-            }
-
-            bridge::set_track_id(&mut track, &request.track_id);
-            if let Some(metadata) = request.metadata.as_ref() {
-                bridge::apply_view(&mut track, metadata);
-            }
-
-            // Validate; skip this file on failure rather than aborting the whole batch.
-            match aoide::usecases::track::validate_input(track) {
-                Ok((validated, _)) => {
-                    existing_paths.insert(stored_path);
-                    validated_batch.push(validated);
-                }
-                Err(e) => {
-                    warnings.push(format!(
-                        "{}: validation failed ({e:?})",
-                        canonical.display()
-                    ));
-                }
+        for result in results {
+            match result {
+                ImportOutcome::Validated(track) => validated_batch.push(*track),
+                ImportOutcome::Skipped => {}
+                ImportOutcome::Warning(msg) => warnings.push(msg),
             }
         }
 
@@ -656,6 +609,96 @@ impl Library {
 
             Ok(())
         })
+    }
+}
+
+// ── Parallel import helpers ──────────────────────────────────────
+
+enum ImportOutcome {
+    Validated(Box<aoide::usecases::track::ValidatedInput>),
+    Skipped,
+    Warning(String),
+}
+
+fn process_single_import(
+    request: &ImportRequest,
+    existing_paths: &HashSet<String>,
+    config: &aoide::media_file::io::import::ImportTrackConfig,
+) -> ImportOutcome {
+    use aoide::media::content::{ContentLink, ContentPath, ContentRevision};
+    use aoide::media_file::{
+        io::import::{ImportTrack, import_into_track},
+        util::guess_mime_from_file_path,
+    };
+    use aoide::util::clock::OffsetDateTimeMs;
+    use std::io::BufReader;
+
+    // Canonicalize and open.
+    let canonical = match request.source_path.canonicalize() {
+        Ok(p) => p,
+        Err(e) => {
+            return ImportOutcome::Warning(format!("{}: {e}", request.source_path.display()));
+        }
+    };
+    let stored_path = request
+        .stored_path
+        .clone()
+        .unwrap_or_else(|| canonical.to_string_lossy().into_owned());
+
+    if existing_paths.contains(&stored_path) {
+        return ImportOutcome::Skipped;
+    }
+
+    let file = match std::fs::File::open(&canonical) {
+        Ok(f) => f,
+        Err(e) => return ImportOutcome::Warning(format!("{}: {e}", canonical.display())),
+    };
+
+    // Content link (absolute path as content path, file mod-time as revision).
+    let content_rev = ContentRevision::try_from_file(&file).ok().flatten();
+    let content_path = ContentPath::new(std::borrow::Cow::Owned(stored_path));
+    let content_link = ContentLink {
+        path: content_path,
+        rev: content_rev,
+    };
+
+    // MIME type.
+    let content_type = match guess_mime_from_file_path(&canonical) {
+        Ok(m) => m,
+        Err(e) => {
+            return ImportOutcome::Warning(format!(
+                "{}: unsupported format ({e})",
+                canonical.display()
+            ));
+        }
+    };
+
+    // Build a new Track skeleton, then import metadata from the file.
+    let import_track = ImportTrack::NewTrack {
+        collected_at: OffsetDateTimeMs::now_local(),
+    };
+    let mut track = import_track.with_content(content_link, content_type);
+
+    let mut reader: Box<dyn aoide::media_file::io::import::Reader> = Box::new(BufReader::new(file));
+    if let Err(e) = import_into_track(&mut reader, config, &mut track) {
+        return ImportOutcome::Warning(format!(
+            "{}: metadata import failed ({e})",
+            canonical.display()
+        ));
+    }
+
+    bridge::set_track_id(&mut track, &request.track_id);
+    if let Some(metadata) = request.metadata.as_ref() {
+        bridge::apply_view(&mut track, metadata);
+    }
+
+    // Validate; skip this file on failure rather than aborting the whole batch.
+    match aoide::usecases::track::validate_input(track) {
+        Ok((validated, _)) => ImportOutcome::Validated(Box::new(validated)),
+        Err(e) => ImportOutcome::Warning(format!(
+            "{}: validation failed ({e:?})",
+            canonical.display()
+        )),
     }
 }
 

@@ -19,7 +19,7 @@ use crate::bridge::{self, TrackField};
 use crate::library::Library as Lib;
 use crate::prefs::{self, Column, SortKey, SortOrder};
 use crate::sync;
-use crate::task::spawn_blocking;
+use crate::task::{self, spawn_blocking};
 use dioxus::prelude::*;
 
 use color_cell::ColorCell;
@@ -99,6 +99,10 @@ pub fn Library(
     let mut hidden_cols = use_signal(prefs::load_hidden_columns);
     let mut selected_tracks: Signal<HashSet<String>> = use_signal(HashSet::new);
     let mut last_clicked: Signal<Option<String>> = use_signal(|| None);
+
+    let progress_phase = use_signal(String::new);
+    let progress_current = use_signal(|| 0u32);
+    let progress_total = use_signal(|| 0u32);
 
     let sorted_tracks = use_memo(move || {
         let mut list = tracks();
@@ -270,8 +274,18 @@ pub fn Library(
                         let input = folder.path().to_path_buf();
                         let lib = consume_context::<Arc<Lib>>();
                         scanning.set(true);
+                        let mut progress = task::ProgressHandle::new(
+                            progress_phase,
+                            progress_current,
+                            progress_total,
+                        );
 
-                        if let Ok(Ok(r)) = spawn_blocking(move || sync::import_folder(&lib, &input)).await {
+                        let result = task::run_with_progress(&mut progress, move |on_progress| {
+                            sync::import_folder(&lib, &input, &*on_progress)
+                        })
+                        .await;
+
+                        if let Ok(Ok(r)) = result {
                             if !r.warnings.is_empty() {
                                 import_warnings.set(r.warnings);
                             }
@@ -280,6 +294,7 @@ pub fn Library(
                                 refresh_tracks(&mut tracks);
                             }
                         }
+                        progress.reset();
                         scanning.set(false);
                     });
                 },
@@ -318,8 +333,18 @@ pub fn Library(
                         let paths: Vec<_> = files.iter().map(|f| f.path().to_path_buf()).collect();
                         let lib = consume_context::<Arc<Lib>>();
                         scanning.set(true);
+                        let mut progress = task::ProgressHandle::new(
+                            progress_phase,
+                            progress_current,
+                            progress_total,
+                        );
 
-                        if let Ok(r) = spawn_blocking(move || sync::import_files(&lib, paths)).await {
+                        let result = task::run_with_progress(&mut progress, move |on_progress| {
+                            sync::import_files(&lib, paths, &*on_progress)
+                        })
+                        .await;
+
+                        if let Ok(r) = result {
                             if !r.warnings.is_empty() {
                                 import_warnings.set(r.warnings);
                             }
@@ -328,6 +353,7 @@ pub fn Library(
                                 refresh_tracks(&mut tracks);
                             }
                         }
+                        progress.reset();
                         scanning.set(false);
                     });
                 },
@@ -368,7 +394,20 @@ pub fn Library(
                 }
             }
             p { class: "track-count",
-                if scanning() { "Scanning..." } else { "{tracks.read().len()} track(s) in library" }
+                if scanning() {
+                    {
+                        let phase = progress_phase();
+                        let current = progress_current();
+                        let total = progress_total();
+                        if total > 0 {
+                            format!("{phase}… {current}/{total}")
+                        } else if phase.is_empty() {
+                            "Scanning…".to_string()
+                        } else {
+                            format!("{phase}…")
+                        }
+                    }
+                } else { "{tracks.read().len()} track(s) in library" }
             }
         }
 

@@ -10,6 +10,7 @@
 use super::SyncError;
 use crate::format::SupportedFormat;
 use crate::library::Library;
+use crate::sync::SyncProgress;
 use std::path::{Path, PathBuf};
 
 fn is_known_audio_extension(ext: &str) -> bool {
@@ -56,10 +57,19 @@ pub struct ImportResult {
 fn import_tracks(
     lib: &Library,
     audio_files: &[(PathBuf, Option<SupportedFormat>)],
+    on_progress: &(dyn Fn(SyncProgress) + Sync),
 ) -> ImportResult {
     let paths: Vec<PathBuf> = audio_files.iter().map(|(p, _)| p.clone()).collect();
 
-    match lib.import_files(&paths) {
+    let progress_cb = |current: u32, total: u32| {
+        on_progress(SyncProgress {
+            phase: "Importing tracks",
+            current,
+            total,
+        });
+    };
+
+    match lib.import_files_with_progress(&paths, Some(&progress_cb)) {
         Ok((imported, warnings)) => ImportResult { imported, warnings },
         Err(e) => ImportResult {
             imported: 0,
@@ -80,19 +90,32 @@ fn classify_file(path: PathBuf) -> Option<(PathBuf, Option<SupportedFormat>)> {
 }
 
 /// Scan a folder and import all audio files into the library.
-pub fn import_folder(lib: &Library, input_dir: &Path) -> Result<ImportResult, SyncError> {
+pub fn import_folder(
+    lib: &Library,
+    input_dir: &Path,
+    on_progress: &(dyn Fn(SyncProgress) + Sync),
+) -> Result<ImportResult, SyncError> {
+    on_progress(SyncProgress {
+        phase: "Finding files",
+        current: 0,
+        total: 0,
+    });
     let all_formats = SupportedFormat::ALL.to_vec();
     let mut audio_files = Vec::new();
     find_audio_files(input_dir, &all_formats, true, &mut audio_files)?;
     audio_files.sort_by(|(a, _), (b, _)| a.cmp(b));
 
-    Ok(import_tracks(lib, &audio_files))
+    Ok(import_tracks(lib, &audio_files, on_progress))
 }
 
 /// Import specific audio files into the library.
-pub fn import_files(lib: &Library, paths: Vec<PathBuf>) -> ImportResult {
+pub fn import_files(
+    lib: &Library,
+    paths: Vec<PathBuf>,
+    on_progress: &(dyn Fn(SyncProgress) + Sync),
+) -> ImportResult {
     let mut audio_files: Vec<_> = paths.into_iter().filter_map(classify_file).collect();
     audio_files.sort_by(|(a, _), (b, _)| a.cmp(b));
 
-    import_tracks(lib, &audio_files)
+    import_tracks(lib, &audio_files, on_progress)
 }

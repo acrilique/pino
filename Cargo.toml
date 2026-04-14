@@ -22,6 +22,7 @@ toml = "1.1.2"
 open = "5"
 dioxus-primitives = { git = "https://github.com/DioxusLabs/components", version = "0.0.1", default-features = false }
 uuid = { version = "1", features = ["v4"] }
+rayon = "1"
 
 [lints.clippy]
 all = "warn"
