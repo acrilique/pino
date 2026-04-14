@@ -8,7 +8,7 @@ edition = "2024"
 
 [dependencies]
 rekordcrate = { git = "https://github.com/acrilique/rekordcrate", branch = "create-db" }
-lofty = "0.23.3"
+lofty = "0.24.0"
 chrono = "0.4.44"
 dioxus = { version = "0.7.5", features = ["desktop"] }
 rfd = "0.17.2"
