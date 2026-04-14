@@ -16,6 +16,8 @@ mod tag_cell;
 use std::collections::HashSet;
 use std::sync::Arc;
 
+use dioxus_core::Task;
+
 use crate::bridge::{self, TrackField};
 use crate::library::Library as Lib;
 use crate::prefs::{self, Column, SortKey, SortOrder};
@@ -91,12 +93,12 @@ pub fn Library(
     mut scanning: Signal<bool>,
     sort_key: Signal<SortKey>,
     sort_order: Signal<SortOrder>,
-    mut search_query: Signal<String>,
     on_sync: EventHandler,
 ) -> Element {
     let mut editing = use_signal(|| None::<(String, EditColumn)>);
     let edit_value = use_signal(String::new);
     let mut context_menu = use_signal(|| None::<ContextMenu>);
+    let mut debounce_task: Signal<Option<Task>> = use_signal(|| None);
     let mut import_warnings: Signal<Vec<String>> = use_signal(Vec::new);
     let mut hidden_cols = use_signal(prefs::load_hidden_columns);
     let mut selected_tracks: Signal<HashSet<String>> = use_signal(HashSet::new);
@@ -311,7 +313,7 @@ pub fn Library(
                                 import_warnings.set(r.warnings);
                             }
                             if r.imported > 0 {
-                                search_query.set(String::new());
+                                document::eval("document.getElementById('search-input').value = ''");
                                 refresh_tracks(&mut tracks);
                             }
                         }
@@ -370,7 +372,7 @@ pub fn Library(
                                 import_warnings.set(r.warnings);
                             }
                             if r.imported > 0 {
-                                search_query.set(String::new());
+                                document::eval("document.getElementById('search-input').value = ''");
                                 refresh_tracks(&mut tracks);
                             }
                         }
@@ -435,14 +437,19 @@ pub fn Library(
         // Search input
         div { class: "search-bar",
             input {
+                id: "search-input",
                 class: "input search-input",
                 r#type: "text",
                 placeholder: "Search tracks…",
-                value: "{search_query}",
                 oninput: move |e: FormEvent| {
                     let q = e.value();
-                    search_query.set(q.clone());
-                    refresh_tracks_with_query(&mut tracks, &q);
+                    if let Some(task) = debounce_task.take() {
+                        Task::cancel(task);
+                    }
+                    debounce_task.set(Some(spawn(async move {
+                        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+                        refresh_tracks_with_query(&mut tracks, &q);
+                    })));
                 },
             }
         }

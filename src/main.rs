@@ -77,7 +77,6 @@ fn App() -> Element {
     let (initial_key, initial_order) = prefs::load_sort_prefs();
     let sort_key = use_signal(|| initial_key);
     let sort_order = use_signal(|| initial_order);
-    let search_query = use_signal(String::new);
 
     // Sync state shared via context.
     use_context_provider(SyncState::new);
@@ -103,7 +102,6 @@ fn App() -> Element {
                 scanning,
                 sort_key,
                 sort_order,
-                search_query,
                 on_sync: move |()| sync_open.set(true),
             }
 
