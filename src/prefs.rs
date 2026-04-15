@@ -30,6 +30,8 @@ struct Prefs {
     dest_dir: String,
     #[serde(rename = "hiddenColumns", default)]
     hidden_columns: Vec<String>,
+    #[serde(rename = "columnOrder", default)]
+    column_order: Vec<String>,
     #[serde(rename = "pageSize", default)]
     page_size: usize,
 }
@@ -293,7 +295,7 @@ impl Column {
         }
     }
 
-    fn as_str(self) -> &'static str {
+    pub fn as_str(self) -> &'static str {
         match self {
             Column::Title => "title",
             Column::Artist => "artist",
@@ -322,7 +324,7 @@ impl Column {
         }
     }
 
-    fn from_str(s: &str) -> Option<Column> {
+    pub fn from_str(s: &str) -> Option<Column> {
         match s {
             "title" => Some(Column::Title),
             "artist" => Some(Column::Artist),
@@ -370,6 +372,65 @@ pub fn load_hidden_columns() -> HashSet<Column> {
 pub fn save_hidden_columns(hidden: &HashSet<Column>) {
     let mut prefs = Prefs::load();
     prefs.hidden_columns = hidden.iter().map(|c| c.as_str().to_string()).collect();
+    prefs.save();
+}
+
+// ── Column order ──────────────────────────────────────────────────────────────
+
+impl Column {
+    pub fn sort_key(self) -> Option<SortKey> {
+        match self {
+            Column::Title => Some(SortKey::Title),
+            Column::Artist => Some(SortKey::Artist),
+            Column::Album => Some(SortKey::Album),
+            Column::Formats => None,
+            Column::Duration => Some(SortKey::Duration),
+            Column::Genre => Some(SortKey::Genre),
+            Column::Composer => Some(SortKey::Composer),
+            Column::Label => Some(SortKey::Label),
+            Column::Remixer => Some(SortKey::Remixer),
+            Column::Key => Some(SortKey::Key),
+            Column::Comment => Some(SortKey::Comment),
+            Column::Isrc => Some(SortKey::Isrc),
+            Column::Lyricist => Some(SortKey::Lyricist),
+            Column::MixName => Some(SortKey::MixName),
+            Column::ReleaseDate => Some(SortKey::ReleaseDate),
+            Column::Bpm => Some(SortKey::Bpm),
+            Column::Year => Some(SortKey::Year),
+            Column::TrackNumber => Some(SortKey::TrackNumber),
+            Column::DiscNumber => Some(SortKey::DiscNumber),
+            Column::Rating => Some(SortKey::Rating),
+            Column::Color => Some(SortKey::Color),
+            Column::AddedAt => Some(SortKey::AddedAt),
+            Column::FileName => Some(SortKey::FileName),
+            Column::Tags => Some(SortKey::Tags),
+        }
+    }
+}
+
+pub fn load_column_order() -> Vec<Column> {
+    let prefs = Prefs::load();
+    if prefs.column_order.is_empty() {
+        Column::ALL.to_vec()
+    } else {
+        let mut order: Vec<Column> = prefs
+            .column_order
+            .iter()
+            .filter_map(|s| Column::from_str(s))
+            .collect();
+        // Append any columns not in the saved order (e.g. newly added ones).
+        for &col in Column::ALL {
+            if !order.contains(&col) {
+                order.push(col);
+            }
+        }
+        order
+    }
+}
+
+pub fn save_column_order(order: &[Column]) {
+    let mut prefs = Prefs::load();
+    prefs.column_order = order.iter().map(|c| c.as_str().to_string()).collect();
     prefs.save();
 }
 

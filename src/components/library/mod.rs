@@ -101,6 +101,7 @@ pub fn Library(
     let mut debounce_task: Signal<Option<Task>> = use_signal(|| None);
     let mut import_warnings: Signal<Vec<String>> = use_signal(Vec::new);
     let mut hidden_cols = use_signal(prefs::load_hidden_columns);
+    let mut col_order = use_signal(prefs::load_column_order);
     let mut selected_tracks: Signal<HashSet<String>> = use_signal(HashSet::new);
     let mut last_clicked: Signal<Option<String>> = use_signal(|| None);
 
@@ -113,6 +114,29 @@ pub fn Library(
         let _ = tracks.read().len();
         visible_count.set(prefs::load_page_size());
     });
+
+    // Column reorder: JS writes to a hidden input, Dioxus reads via oninput.
+    let handle_col_reorder = move |e: FormEvent| {
+        let s = e.value();
+        let parts: Vec<&str> = s.split(',').collect();
+        if parts.len() != 3 {
+            return;
+        }
+        let (f, t, side) = (parts[0], parts[1], parts[2]);
+        if let (Some(from_col), Some(to_col)) = (Column::from_str(f), Column::from_str(t)) {
+            let mut order = col_order.write();
+            if let Some(from_pos) = order.iter().position(|&c| c == from_col) {
+                let item = order.remove(from_pos);
+                if let Some(mut to_pos) = order.iter().position(|&c| c == to_col) {
+                    if side == "right" {
+                        to_pos += 1;
+                    }
+                    order.insert(to_pos, item);
+                    prefs::save_column_order(&order);
+                }
+            }
+        }
+    };
 
     let progress_phase = use_signal(String::new);
     let progress_current = use_signal(|| 0u32);
@@ -493,6 +517,12 @@ pub fn Library(
         }
 
         if !tracks.read().is_empty() {
+            // Hidden input for JS → Rust column reorder communication.
+            input {
+                id: "col-reorder-input",
+                r#type: "hidden",
+                oninput: handle_col_reorder,
+            }
             div {
                 class: "track-list",
                 id: "track-list",
@@ -531,83 +561,33 @@ pub fn Library(
                                     target: ContextTarget::Header,
                                 }));
                             },
-                            if !hidden_cols.read().contains(&Column::Title) {
-                                SortableHeader { label: "Title", col_key: SortKey::Title, sort_key, sort_order, resizable: true }
-                            }
-                            if !hidden_cols.read().contains(&Column::Artist) {
-                                SortableHeader { label: "Artist", col_key: SortKey::Artist, sort_key, sort_order, resizable: true }
-                            }
-                            if !hidden_cols.read().contains(&Column::Album) {
-                                SortableHeader { label: "Album", col_key: SortKey::Album, sort_key, sort_order, resizable: true }
-                            }
-                            if !hidden_cols.read().contains(&Column::Formats) {
-                                th {
-                                    "Formats"
-                                    div {
-                                        class: "col-resizer",
-                                        onclick: |e: MouseEvent| e.stop_propagation(),
+                            for &col in col_order.read().iter() {
+                                if !hidden_cols.read().contains(&col) {
+                                    {
+                                        match col.sort_key() {
+                                            Some(col_key) => rsx! {
+                                                SortableHeader {
+                                                    label: col.label(),
+                                                    col_key,
+                                                    sort_key,
+                                                    sort_order,
+                                                    resizable: true,
+                                                    col_id: col.as_str(),
+                                                }
+                                            },
+                                            None => rsx! {
+                                                th {
+                                                    "data-col": col.as_str(),
+                                                    "{col.label()}"
+                                                    div {
+                                                        class: "col-resizer",
+                                                        onclick: |e: MouseEvent| e.stop_propagation(),
+                                                    }
+                                                }
+                                            }
+                                        }
                                     }
                                 }
-                            }
-                            if !hidden_cols.read().contains(&Column::Duration) {
-                                SortableHeader { label: "Duration", col_key: SortKey::Duration, sort_key, sort_order, resizable: true }
-                            }
-                            if !hidden_cols.read().contains(&Column::Genre) {
-                                SortableHeader { label: "Genre", col_key: SortKey::Genre, sort_key, sort_order, resizable: true }
-                            }
-                            if !hidden_cols.read().contains(&Column::Composer) {
-                                SortableHeader { label: "Composer", col_key: SortKey::Composer, sort_key, sort_order, resizable: true }
-                            }
-                            if !hidden_cols.read().contains(&Column::Label) {
-                                SortableHeader { label: "Label", col_key: SortKey::Label, sort_key, sort_order, resizable: true }
-                            }
-                            if !hidden_cols.read().contains(&Column::Remixer) {
-                                SortableHeader { label: "Remixer", col_key: SortKey::Remixer, sort_key, sort_order, resizable: true }
-                            }
-                            if !hidden_cols.read().contains(&Column::Key) {
-                                SortableHeader { label: "Key", col_key: SortKey::Key, sort_key, sort_order, resizable: true }
-                            }
-                            if !hidden_cols.read().contains(&Column::Comment) {
-                                SortableHeader { label: "Comment", col_key: SortKey::Comment, sort_key, sort_order, resizable: true }
-                            }
-                            if !hidden_cols.read().contains(&Column::Isrc) {
-                                SortableHeader { label: "ISRC", col_key: SortKey::Isrc, sort_key, sort_order, resizable: true }
-                            }
-                            if !hidden_cols.read().contains(&Column::Lyricist) {
-                                SortableHeader { label: "Lyricist", col_key: SortKey::Lyricist, sort_key, sort_order, resizable: true }
-                            }
-                            if !hidden_cols.read().contains(&Column::MixName) {
-                                SortableHeader { label: "Mix Name", col_key: SortKey::MixName, sort_key, sort_order, resizable: true }
-                            }
-                            if !hidden_cols.read().contains(&Column::ReleaseDate) {
-                                SortableHeader { label: "Release Date", col_key: SortKey::ReleaseDate, sort_key, sort_order, resizable: true }
-                            }
-                            if !hidden_cols.read().contains(&Column::Bpm) {
-                                SortableHeader { label: "BPM", col_key: SortKey::Bpm, sort_key, sort_order, resizable: true }
-                            }
-                            if !hidden_cols.read().contains(&Column::Year) {
-                                SortableHeader { label: "Year", col_key: SortKey::Year, sort_key, sort_order, resizable: true }
-                            }
-                            if !hidden_cols.read().contains(&Column::TrackNumber) {
-                                SortableHeader { label: "Track #", col_key: SortKey::TrackNumber, sort_key, sort_order, resizable: true }
-                            }
-                            if !hidden_cols.read().contains(&Column::DiscNumber) {
-                                SortableHeader { label: "Disc #", col_key: SortKey::DiscNumber, sort_key, sort_order, resizable: true }
-                            }
-                            if !hidden_cols.read().contains(&Column::Rating) {
-                                SortableHeader { label: "Rating", col_key: SortKey::Rating, sort_key, sort_order, resizable: true }
-                            }
-                            if !hidden_cols.read().contains(&Column::Color) {
-                                SortableHeader { label: "Color", col_key: SortKey::Color, sort_key, sort_order, resizable: true }
-                            }
-                            if !hidden_cols.read().contains(&Column::AddedAt) {
-                                SortableHeader { label: "Added At", col_key: SortKey::AddedAt, sort_key, sort_order, resizable: true }
-                            }
-                            if !hidden_cols.read().contains(&Column::FileName) {
-                                SortableHeader { label: "File Name", col_key: SortKey::FileName, sort_key, sort_order, resizable: true }
-                            }
-                            if !hidden_cols.read().contains(&Column::Tags) {
-                                SortableHeader { label: "Tags", col_key: SortKey::Tags, sort_key, sort_order, resizable: true }
                             }
                         }
                     }
@@ -682,232 +662,122 @@ pub fn Library(
                                                 }));
                                             }
                                         },
-                                        EditableCell {
-                                            track_id: track_id.clone(),
-                                            column: EditColumn::Title,
-                                            value: twf.title.clone(),
-                                            editing,
-                                            edit_value,
-                                            on_commit: move |()| commit_edit(),
-                                            hidden: hidden_cols.read().contains(&Column::Title),
-                                        }
-                                        EditableCell {
-                                            track_id: track_id.clone(),
-                                            column: EditColumn::Artist,
-                                            value: twf.artist.clone(),
-                                            editing,
-                                            edit_value,
-                                            on_commit: move |()| commit_edit(),
-                                            hidden: hidden_cols.read().contains(&Column::Artist),
-                                        }
-                                        EditableCell {
-                                            track_id: track_id.clone(),
-                                            column: EditColumn::Album,
-                                            value: twf.album.clone(),
-                                            editing,
-                                            edit_value,
-                                            on_commit: move |()| commit_edit(),
-                                            hidden: hidden_cols.read().contains(&Column::Album),
-                                        }
-                                        if !hidden_cols.read().contains(&Column::Formats) {
-                                            td { class: "formats-cell",
-                                                for file in &twf.files {
-                                                    {
-                                                        let file_path_ctx = file.file_path.clone();
-                                                        let track_id_for_file = track_id.clone();
-                                                        let fmt = file.format.clone();
-                                                        rsx! {
-                                                            span {
-                                                                class: "format-badge",
-                                                                oncontextmenu: move |e: MouseEvent| {
-                                                                    e.prevent_default();
-                                                                    context_menu.set(Some(ContextMenu {
-                                                                        x: e.page_coordinates().x,
-                                                                        y: e.page_coordinates().y,
-                                                                        target: ContextTarget::File {
-                                                                            file_path: file_path_ctx.clone(),
-                                                                            track_id: track_id_for_file.clone(),
-                                                                            format: fmt.clone(),
-                                                                        },
-                                                                    }));
-                                                                },
-                                                                "{file.format}"
+                                        for &col in col_order.read().iter() {
+                                            if !hidden_cols.read().contains(&col) {
+                                                {
+                                                    match col {
+                                                        Column::Title => rsx! {
+                                                            EditableCell { track_id: track_id.clone(), column: EditColumn::Title, value: twf.title.clone(), editing, edit_value, on_commit: move |()| commit_edit() }
+                                                        },
+                                                        Column::Artist => rsx! {
+                                                            EditableCell { track_id: track_id.clone(), column: EditColumn::Artist, value: twf.artist.clone(), editing, edit_value, on_commit: move |()| commit_edit() }
+                                                        },
+                                                        Column::Album => rsx! {
+                                                            EditableCell { track_id: track_id.clone(), column: EditColumn::Album, value: twf.album.clone(), editing, edit_value, on_commit: move |()| commit_edit() }
+                                                        },
+                                                        Column::Formats => {
+                                                            rsx! {
+                                                                td { class: "formats-cell",
+                                                                    for file in &twf.files {
+                                                                        {
+                                                                            let file_path_ctx = file.file_path.clone();
+                                                                            let track_id_for_file = track_id.clone();
+                                                                            let fmt = file.format.clone();
+                                                                            rsx! {
+                                                                                span {
+                                                                                    class: "format-badge",
+                                                                                    oncontextmenu: move |e: MouseEvent| {
+                                                                                        e.prevent_default();
+                                                                                        context_menu.set(Some(ContextMenu {
+                                                                                            x: e.page_coordinates().x,
+                                                                                            y: e.page_coordinates().y,
+                                                                                            target: ContextTarget::File {
+                                                                                                file_path: file_path_ctx.clone(),
+                                                                                                track_id: track_id_for_file.clone(),
+                                                                                                format: fmt.clone(),
+                                                                                            },
+                                                                                        }));
+                                                                                    },
+                                                                                    "{file.format}"
+                                                                                }
+                                                                            }
+                                                                        }
+                                                                    }
+                                                                }
                                                             }
-                                                        }
+                                                        },
+                                                        Column::Duration => rsx! {
+                                                            td { "{format_duration(twf.duration_secs)}" }
+                                                        },
+                                                        Column::Genre => rsx! {
+                                                            EditableCell { track_id: track_id.clone(), column: EditColumn::Genre, value: twf.genre.clone(), editing, edit_value, on_commit: move |()| commit_edit() }
+                                                        },
+                                                        Column::Composer => rsx! {
+                                                            EditableCell { track_id: track_id.clone(), column: EditColumn::Composer, value: twf.composer.clone(), editing, edit_value, on_commit: move |()| commit_edit() }
+                                                        },
+                                                        Column::Label => rsx! {
+                                                            EditableCell { track_id: track_id.clone(), column: EditColumn::Label, value: twf.label.clone(), editing, edit_value, on_commit: move |()| commit_edit() }
+                                                        },
+                                                        Column::Remixer => rsx! {
+                                                            EditableCell { track_id: track_id.clone(), column: EditColumn::Remixer, value: twf.remixer.clone(), editing, edit_value, on_commit: move |()| commit_edit() }
+                                                        },
+                                                        Column::Key => rsx! {
+                                                            EditableCell { track_id: track_id.clone(), column: EditColumn::Key, value: twf.key.clone(), editing, edit_value, on_commit: move |()| commit_edit() }
+                                                        },
+                                                        Column::Comment => rsx! {
+                                                            EditableCell { track_id: track_id.clone(), column: EditColumn::Comment, value: twf.comment.clone(), editing, edit_value, on_commit: move |()| commit_edit() }
+                                                        },
+                                                        Column::Isrc => rsx! {
+                                                            EditableCell { track_id: track_id.clone(), column: EditColumn::Isrc, value: twf.isrc.clone(), editing, edit_value, on_commit: move |()| commit_edit() }
+                                                        },
+                                                        Column::Lyricist => rsx! {
+                                                            EditableCell { track_id: track_id.clone(), column: EditColumn::Lyricist, value: twf.lyricist.clone(), editing, edit_value, on_commit: move |()| commit_edit() }
+                                                        },
+                                                        Column::MixName => rsx! {
+                                                            EditableCell { track_id: track_id.clone(), column: EditColumn::MixName, value: twf.mix_name.clone(), editing, edit_value, on_commit: move |()| commit_edit() }
+                                                        },
+                                                        Column::ReleaseDate => rsx! {
+                                                            EditableCell { track_id: track_id.clone(), column: EditColumn::ReleaseDate, value: twf.release_date.clone(), editing, edit_value, on_commit: move |()| commit_edit() }
+                                                        },
+                                                        Column::Bpm => rsx! {
+                                                            EditableCell { track_id: track_id.clone(), column: EditColumn::Bpm, value: if twf.tempo == 0 { String::new() } else { twf.tempo.to_string() }, editing, edit_value, on_commit: move |()| commit_edit() }
+                                                        },
+                                                        Column::Year => rsx! {
+                                                            EditableCell { track_id: track_id.clone(), column: EditColumn::Year, value: if twf.year == 0 { String::new() } else { twf.year.to_string() }, editing, edit_value, on_commit: move |()| commit_edit() }
+                                                        },
+                                                        Column::TrackNumber => rsx! {
+                                                            EditableCell { track_id: track_id.clone(), column: EditColumn::TrackNumber, value: if twf.track_number == 0 { String::new() } else { twf.track_number.to_string() }, editing, edit_value, on_commit: move |()| commit_edit() }
+                                                        },
+                                                        Column::DiscNumber => rsx! {
+                                                            EditableCell { track_id: track_id.clone(), column: EditColumn::DiscNumber, value: if twf.disc_number == 0 { String::new() } else { twf.disc_number.to_string() }, editing, edit_value, on_commit: move |()| commit_edit() }
+                                                        },
+                                                        Column::Rating => {
+                                                            let tid = track_id.clone();
+                                                            rsx! {
+                                                                RatingCell { track_id: track_id.clone(), value: twf.rating, on_change: move |v: u8| update_rating(tid.clone(), v) }
+                                                            }
+                                                        },
+                                                        Column::Color => {
+                                                            let tid = track_id.clone();
+                                                            rsx! {
+                                                                ColorCell { track_id: track_id.clone(), value: twf.color, on_change: move |v: u8| update_color(tid.clone(), v) }
+                                                            }
+                                                        },
+                                                        Column::AddedAt => rsx! {
+                                                            EditableCell { track_id: track_id.clone(), column: EditColumn::AddedAt, value: twf.added_at.clone(), editing, edit_value, on_commit: move |()| commit_edit() }
+                                                        },
+                                                        Column::FileName => rsx! {
+                                                            td { "{twf.files.first().map(|f| file_basename(&f.file_path)).unwrap_or_default()}" }
+                                                        },
+                                                        Column::Tags => {
+                                                            let tid = track_id.clone();
+                                                            rsx! {
+                                                                TagCell { track_id: track_id.clone(), tags: twf.tags.clone(), editing, on_change: move |v: Vec<String>| update_tags(tid.clone(), v) }
+                                                            }
+                                                        },
                                                     }
                                                 }
                                             }
-                                        }
-                                        if !hidden_cols.read().contains(&Column::Duration) {
-                                            td { "{format_duration(twf.duration_secs)}" }
-                                        }
-                                        EditableCell {
-                                            track_id: track_id.clone(),
-                                            column: EditColumn::Genre,
-                                            value: twf.genre.clone(),
-                                            editing,
-                                            edit_value,
-                                            on_commit: move |()| commit_edit(),
-                                            hidden: hidden_cols.read().contains(&Column::Genre),
-                                        }
-                                        EditableCell {
-                                            track_id: track_id.clone(),
-                                            column: EditColumn::Composer,
-                                            value: twf.composer.clone(),
-                                            editing,
-                                            edit_value,
-                                            on_commit: move |()| commit_edit(),
-                                            hidden: hidden_cols.read().contains(&Column::Composer),
-                                        }
-                                        EditableCell {
-                                            track_id: track_id.clone(),
-                                            column: EditColumn::Label,
-                                            value: twf.label.clone(),
-                                            editing,
-                                            edit_value,
-                                            on_commit: move |()| commit_edit(),
-                                            hidden: hidden_cols.read().contains(&Column::Label),
-                                        }
-                                        EditableCell {
-                                            track_id: track_id.clone(),
-                                            column: EditColumn::Remixer,
-                                            value: twf.remixer.clone(),
-                                            editing,
-                                            edit_value,
-                                            on_commit: move |()| commit_edit(),
-                                            hidden: hidden_cols.read().contains(&Column::Remixer),
-                                        }
-                                        EditableCell {
-                                            track_id: track_id.clone(),
-                                            column: EditColumn::Key,
-                                            value: twf.key.clone(),
-                                            editing,
-                                            edit_value,
-                                            on_commit: move |()| commit_edit(),
-                                            hidden: hidden_cols.read().contains(&Column::Key),
-                                        }
-                                        EditableCell {
-                                            track_id: track_id.clone(),
-                                            column: EditColumn::Comment,
-                                            value: twf.comment.clone(),
-                                            editing,
-                                            edit_value,
-                                            on_commit: move |()| commit_edit(),
-                                            hidden: hidden_cols.read().contains(&Column::Comment),
-                                        }
-                                        EditableCell {
-                                            track_id: track_id.clone(),
-                                            column: EditColumn::Isrc,
-                                            value: twf.isrc.clone(),
-                                            editing,
-                                            edit_value,
-                                            on_commit: move |()| commit_edit(),
-                                            hidden: hidden_cols.read().contains(&Column::Isrc),
-                                        }
-                                        EditableCell {
-                                            track_id: track_id.clone(),
-                                            column: EditColumn::Lyricist,
-                                            value: twf.lyricist.clone(),
-                                            editing,
-                                            edit_value,
-                                            on_commit: move |()| commit_edit(),
-                                            hidden: hidden_cols.read().contains(&Column::Lyricist),
-                                        }
-                                        EditableCell {
-                                            track_id: track_id.clone(),
-                                            column: EditColumn::MixName,
-                                            value: twf.mix_name.clone(),
-                                            editing,
-                                            edit_value,
-                                            on_commit: move |()| commit_edit(),
-                                            hidden: hidden_cols.read().contains(&Column::MixName),
-                                        }
-                                        EditableCell {
-                                            track_id: track_id.clone(),
-                                            column: EditColumn::ReleaseDate,
-                                            value: twf.release_date.clone(),
-                                            editing,
-                                            edit_value,
-                                            on_commit: move |()| commit_edit(),
-                                            hidden: hidden_cols.read().contains(&Column::ReleaseDate),
-                                        }
-                                        EditableCell {
-                                            track_id: track_id.clone(),
-                                            column: EditColumn::Bpm,
-                                            value: if twf.tempo == 0 { String::new() } else { twf.tempo.to_string() },
-                                            editing,
-                                            edit_value,
-                                            on_commit: move |()| commit_edit(),
-                                            hidden: hidden_cols.read().contains(&Column::Bpm),
-                                        }
-                                        EditableCell {
-                                            track_id: track_id.clone(),
-                                            column: EditColumn::Year,
-                                            value: if twf.year == 0 { String::new() } else { twf.year.to_string() },
-                                            editing,
-                                            edit_value,
-                                            on_commit: move |()| commit_edit(),
-                                            hidden: hidden_cols.read().contains(&Column::Year),
-                                        }
-                                        EditableCell {
-                                            track_id: track_id.clone(),
-                                            column: EditColumn::TrackNumber,
-                                            value: if twf.track_number == 0 { String::new() } else { twf.track_number.to_string() },
-                                            editing,
-                                            edit_value,
-                                            on_commit: move |()| commit_edit(),
-                                            hidden: hidden_cols.read().contains(&Column::TrackNumber),
-                                        }
-                                        EditableCell {
-                                            track_id: track_id.clone(),
-                                            column: EditColumn::DiscNumber,
-                                            value: if twf.disc_number == 0 { String::new() } else { twf.disc_number.to_string() },
-                                            editing,
-                                            edit_value,
-                                            on_commit: move |()| commit_edit(),
-                                            hidden: hidden_cols.read().contains(&Column::DiscNumber),
-                                        }
-                                        RatingCell {
-                                            track_id: track_id.clone(),
-                                            value: twf.rating,
-                                            on_change: {
-                                                let tid = track_id.clone();
-                                                move |v: u8| update_rating(tid.clone(), v)
-                                            },
-                                            hidden: hidden_cols.read().contains(&Column::Rating),
-                                        }
-                                        ColorCell {
-                                            track_id: track_id.clone(),
-                                            value: twf.color,
-                                            on_change: {
-                                                let tid = track_id.clone();
-                                                move |v: u8| update_color(tid.clone(), v)
-                                            },
-                                            hidden: hidden_cols.read().contains(&Column::Color),
-                                        }
-                                        EditableCell {
-                                            track_id: track_id.clone(),
-                                            column: EditColumn::AddedAt,
-                                            value: twf.added_at.clone(),
-                                            editing,
-                                            edit_value,
-                                            on_commit: move |()| commit_edit(),
-                                            hidden: hidden_cols.read().contains(&Column::AddedAt),
-                                        }
-                                        if !hidden_cols.read().contains(&Column::FileName) {
-                                            td {
-                                                "{twf.files.first().map(|f| file_basename(&f.file_path)).unwrap_or_default()}"
-                                            }
-                                        }
-                                        TagCell {
-                                            track_id: track_id.clone(),
-                                            tags: twf.tags.clone(),
-                                            editing,
-                                            on_change: {
-                                                let tid = track_id.clone();
-                                                move |v: Vec<String>| update_tags(tid.clone(), v)
-                                            },
-                                            hidden: hidden_cols.read().contains(&Column::Tags),
                                         }
                                     }
                                 }

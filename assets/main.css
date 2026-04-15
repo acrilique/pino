@@ -411,6 +411,8 @@ input[type="checkbox"] {
     z-index: 2;
     box-sizing: border-box;
     white-space: nowrap;
+    user-select: none;
+    -webkit-user-select: none;
 }
 
 .track-list thead th.sortable {
@@ -444,6 +446,40 @@ input[type="checkbox"] {
 .col-resizer:hover,
 .col-resizer.active {
     background: var(--accent);
+}
+
+.track-list thead th.drag-source {
+    opacity: 0.4;
+}
+
+.track-list thead th.drag-over-left {
+    box-shadow: inset 3px 0 0 0 var(--accent);
+}
+
+.track-list thead th.drag-over-right {
+    box-shadow: inset -3px 0 0 0 var(--accent);
+}
+
+.col-drag-indicator {
+    position: absolute;
+    width: 2px;
+    background: var(--accent);
+    z-index: 1000;
+    pointer-events: none;
+}
+
+.col-drag-ghost {
+    position: fixed;
+    padding: 4px 10px;
+    background: var(--bg-elevated);
+    border: 1px solid var(--accent);
+    border-radius: 4px;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-primary);
+    z-index: 1001;
+    pointer-events: none;
+    white-space: nowrap;
 }
 
 .track-list tbody td {
