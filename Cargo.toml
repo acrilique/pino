@@ -12,7 +12,7 @@ aoide = { git = "https://gitlab.com/uklotzde/aoide-rs", rev = "c63135b5f5f6f4f36
 rekordcrate = { git = "https://github.com/acrilique/rekordcrate", branch = "create-db" }
 unicode-normalization = "0.1"
 chrono = "0.4.44"
-dioxus = { version = "0.7.5", features = ["desktop"] }
+dioxus = { version = "0.7.6", features = ["desktop"] }
 rfd = "0.17.2"
 tokio = { version = "1", features = ["sync", "rt"] }
 dirs = "6"
