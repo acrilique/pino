@@ -63,7 +63,7 @@ jobs:
               run: rustc -vV
 
             - name: Install cargo-binstall
-              uses: cargo-bins/cargo-binstall@0b24824336e2b3800b0f89d9e08b2c08bfa3dcdd
+              uses: cargo-bins/cargo-binstall@732870f031d2fb36309d0deaf36abcc704a7be65
 
             - name: Install OpenSSL
               if: runner.os == 'macOS'
