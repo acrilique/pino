@@ -53,7 +53,7 @@ pub struct TrackView {
     pub mix_name: String,
     pub release_date: String,
     pub duration_secs: u16,
-    pub tempo: u32,
+    pub tempo: f32,
     pub year: u16,
     pub track_number: u32,
     pub disc_number: u16,
@@ -91,7 +91,7 @@ pub enum TrackField {
     Lyricist(String),
     MixName(String),
     ReleaseDate(String),
-    Tempo(u32),
+    Tempo(f32),
     Year(u16),
     TrackNumber(u32),
     DiscNumber(u16),
@@ -138,10 +138,7 @@ pub fn flatten(entity: &Entity) -> TrackView {
             .released_at
             .map_or_else(String::new, |d| d.to_string()),
         duration_secs: audio.duration.map_or(0, |d| (d.value() / 1000.0) as u16),
-        tempo: track
-            .metrics
-            .tempo_bpm
-            .map_or(0, |t| (t.value() * 100.0) as u32),
+        tempo: track.metrics.tempo_bpm.map_or(0.0, |t| t.value() as f32),
         year: track.recorded_at.map_or(0, |d| {
             let y = d.year();
             if y > 0 { y as u16 } else { 0 }
@@ -256,10 +253,10 @@ fn apply_track_field(track: &mut track::Track, field: TrackField) {
             };
         }
         TrackField::Tempo(v) => {
-            track.metrics.tempo_bpm = if v == 0 {
+            track.metrics.tempo_bpm = if v == 0.0 {
                 None
             } else {
-                Some(TempoBpm::new(f64::from(v) / 100.0))
+                Some(TempoBpm::new(f64::from(v)))
             };
         }
         TrackField::Year(v) => {

@@ -7,514 +7,39 @@
 //
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-use super::{SyncError, device_relative_path, today};
-use crate::bridge::TrackView;
-use crate::format::SupportedFormat;
-use crate::library::Library;
+//! `exportExt.pdb` (tags). The main `export.pdb` is now built by
+//! [`rekordcrate::DeviceExportWriter`]; only the extended tag DB remains pino-specific,
+//! since the high-level writer doesn't cover it.
+
+use super::SyncError;
 use rekordcrate::pdb::ext::{
     ExtPageType, ExtRow, ParentId, TagId, TagOrCategory, TagOrCategoryStrings, TrackTag,
 };
 use rekordcrate::pdb::io::Database;
 use rekordcrate::pdb::offset_array::OffsetArrayContainer;
 use rekordcrate::pdb::string::DeviceSQLString;
-use rekordcrate::pdb::{
-    Album, Artist, Artwork, DatabaseType, Genre, History, Key, Label, PageType, PlainPageType,
-    PlainRow, Row, Subtype,
-};
-use rekordcrate::util::{ColorIndex, MaybeCalculated};
+use rekordcrate::pdb::{DatabaseType, PageType, Row, Subtype, TrackId};
+use rekordcrate::util::MaybeCalculated;
 use std::collections::HashMap;
 use std::fs::File;
 use std::path::Path;
 
-type ArtistMap = HashMap<String, u32>;
-type AlbumMap = HashMap<(String, u32), u32>;
-type GenreMap = HashMap<String, u32>;
-type KeyMap = HashMap<String, u32>;
-type LabelMap = HashMap<String, u32>;
-type ArtworkMap = HashMap<String, u32>;
-
-struct IdMaps {
-    artists: ArtistMap,
-    albums: AlbumMap,
-    genres: GenreMap,
-    keys: KeyMap,
-    labels: LabelMap,
-    artworks: ArtworkMap,
-}
-
-/// Generate a Pioneer PDB database from all tracks in the given library.
-pub(super) fn generate_pdb(
-    lib: &Library,
-    dest_dir: &Path,
-    warnings: &super::SyncWarnings,
-) -> Result<u32, SyncError> {
-    let all = lib
-        .all_tracks()
-        .map_err(|e| SyncError::Other(e.to_string()))?;
-
-    if all.is_empty() {
-        return Ok(0);
-    }
-
-    let rekordbox_dir = dest_dir.join("PIONEER").join("rekordbox");
-    std::fs::create_dir_all(&rekordbox_dir)?;
-
-    let maps = build_id_maps(&all);
-
-    copy_artwork_to_device(&all, &maps.artworks, dest_dir)?;
-
-    let mut pdb = create_pdb(&rekordbox_dir)?;
-
-    let today = today();
-    let exported_count = insert_tracks(&mut pdb, &all, &maps, &today, dest_dir, warnings)?;
-    insert_artists(&mut pdb, &maps.artists)?;
-    insert_albums(&mut pdb, &maps.albums)?;
-    insert_genres(&mut pdb, &maps.genres)?;
-    insert_keys(&mut pdb, &maps.keys)?;
-    insert_labels(&mut pdb, &maps.labels)?;
-    insert_artworks(&mut pdb, &maps.artworks)?;
-
-    rekordcrate::pdb::defaults::insert_default_colors(&mut pdb)?;
-    rekordcrate::pdb::defaults::insert_default_columns(&mut pdb)?;
-    rekordcrate::pdb::defaults::insert_default_menus(&mut pdb)?;
-
-    pdb.add_row(Row::Plain(PlainRow::History(History {
-        subtype: Subtype(640),
-        index_shift: 0,
-        num_tracks: exported_count,
-        date: today.parse()?,
-        version: "1000".parse()?,
-        label: DeviceSQLString::empty(),
-    })))?;
-
-    pdb.close()?;
-
-    let total_tracks = u32::try_from(all.len()).unwrap_or(u32::MAX);
-    let pdb_skipped = total_tracks.saturating_sub(exported_count);
-
-    println!(
-        "PDB: {} track(s), {} artist(s), {} album(s), {} genre(s), {} key(s), {} label(s), {} artwork(s)",
-        exported_count,
-        maps.artists.len(),
-        maps.albums.len(),
-        maps.genres.len(),
-        maps.keys.len(),
-        maps.labels.len(),
-        maps.artworks.len(),
-    );
-
-    Ok(pdb_skipped)
-}
-
-/// Build sequential ID maps for artists, albums, genres, keys, and labels from the track list.
+/// Generate the extended PDB (`exportExt.pdb`) with tag/track-tag associations.
 ///
-/// Composers and remixers are inserted into the artist map (they get their own artist IDs).
-fn build_id_maps(all: &[TrackView]) -> IdMaps {
-    let mut artist_map: ArtistMap = HashMap::new();
-    let mut next_artist_id: u32 = 1;
-    let mut album_map: AlbumMap = HashMap::new();
-    let mut next_album_id: u32 = 1;
-    let mut genre_map: GenreMap = HashMap::new();
-    let mut next_genre_id: u32 = 1;
-    let mut key_map: KeyMap = HashMap::new();
-    let mut next_key_id: u32 = 1;
-    let mut label_map: LabelMap = HashMap::new();
-    let mut next_label_id: u32 = 1;
-    let mut artwork_map: ArtworkMap = HashMap::new();
-    let mut next_artwork_id: u32 = 1;
-
-    for tv in all {
-        if !tv.artist.is_empty() && !artist_map.contains_key(&tv.artist) {
-            artist_map.insert(tv.artist.clone(), next_artist_id);
-            next_artist_id += 1;
-        }
-
-        if !tv.composer.is_empty() && !artist_map.contains_key(&tv.composer) {
-            artist_map.insert(tv.composer.clone(), next_artist_id);
-            next_artist_id += 1;
-        }
-
-        if !tv.remixer.is_empty() && !artist_map.contains_key(&tv.remixer) {
-            artist_map.insert(tv.remixer.clone(), next_artist_id);
-            next_artist_id += 1;
-        }
-
-        if !tv.album.is_empty() {
-            let artist_id = if tv.artist.is_empty() {
-                0
-            } else {
-                artist_map[&tv.artist]
-            };
-            let key = (tv.album.clone(), artist_id);
-            if let std::collections::hash_map::Entry::Vacant(entry) = album_map.entry(key) {
-                entry.insert(next_album_id);
-                next_album_id += 1;
-            }
-        }
-
-        if !tv.genre.is_empty() && !genre_map.contains_key(&tv.genre) {
-            genre_map.insert(tv.genre.clone(), next_genre_id);
-            next_genre_id += 1;
-        }
-
-        if !tv.key.is_empty() && !key_map.contains_key(&tv.key) {
-            key_map.insert(tv.key.clone(), next_key_id);
-            next_key_id += 1;
-        }
-
-        if !tv.label.is_empty() && !label_map.contains_key(&tv.label) {
-            label_map.insert(tv.label.clone(), next_label_id);
-            next_label_id += 1;
-        }
-
-        if !tv.artwork_path.is_empty() && !artwork_map.contains_key(&tv.artwork_path) {
-            artwork_map.insert(tv.artwork_path.clone(), next_artwork_id);
-            next_artwork_id += 1;
-        }
-    }
-
-    IdMaps {
-        artists: artist_map,
-        albums: album_map,
-        genres: genre_map,
-        keys: key_map,
-        labels: label_map,
-        artworks: artwork_map,
-    }
-}
-
-/// Create the PDB file with the standard rekordbox table layout.
-fn create_pdb(rekordbox_dir: &Path) -> Result<Database<File>, SyncError> {
-    let table_page_types = vec![
-        PageType::Plain(PlainPageType::Tracks),
-        PageType::Plain(PlainPageType::Genres),
-        PageType::Plain(PlainPageType::Artists),
-        PageType::Plain(PlainPageType::Albums),
-        PageType::Plain(PlainPageType::Labels),
-        PageType::Plain(PlainPageType::Keys),
-        PageType::Plain(PlainPageType::Colors),
-        PageType::Plain(PlainPageType::PlaylistTree),
-        PageType::Plain(PlainPageType::PlaylistEntries),
-        PageType::Unknown(9),
-        PageType::Unknown(10),
-        PageType::Plain(PlainPageType::HistoryPlaylists),
-        PageType::Plain(PlainPageType::HistoryEntries),
-        PageType::Plain(PlainPageType::Artwork),
-        PageType::Unknown(14),
-        PageType::Unknown(15),
-        PageType::Plain(PlainPageType::Columns),
-        PageType::Plain(PlainPageType::Menu),
-        PageType::Unknown(18),
-        PageType::Plain(PlainPageType::History),
-    ];
-
-    let pdb_path = rekordbox_dir.join("export.pdb");
-    let pdb_file = File::create(&pdb_path)?;
-    Ok(Database::create(
-        pdb_file,
-        DatabaseType::Plain,
-        &table_page_types,
-    )?)
-}
-
-/// Resolve all ID-map lookups for a single track, returning IDs in field order.
-fn resolve_track_ids(tv: &TrackView, maps: &IdMaps) -> (u32, u32, u32, u32, u32, u32, u32, u32) {
-    let artist_id = maps.artists.get(&tv.artist).copied().unwrap_or(0);
-    let album_id = maps
-        .albums
-        .get(&(tv.album.clone(), artist_id))
-        .copied()
-        .unwrap_or(0);
-    let genre_id = maps.genres.get(&tv.genre).copied().unwrap_or(0);
-    let key_id = maps.keys.get(&tv.key).copied().unwrap_or(0);
-    let label_id = maps.labels.get(&tv.label).copied().unwrap_or(0);
-    let composer_id = maps.artists.get(&tv.composer).copied().unwrap_or(0);
-    let remixer_id = maps.artists.get(&tv.remixer).copied().unwrap_or(0);
-    let artwork_id = maps.artworks.get(&tv.artwork_path).copied().unwrap_or(0);
-    (
-        artist_id,
-        album_id,
-        genre_id,
-        key_id,
-        label_id,
-        composer_id,
-        remixer_id,
-        artwork_id,
-    )
-}
-
-/// Insert track rows into the PDB, returning the number of successfully exported tracks.
-fn insert_tracks(
-    pdb: &mut Database<File>,
-    all: &[TrackView],
-    maps: &IdMaps,
-    today: &str,
-    dest_dir: &Path,
-    warnings: &super::SyncWarnings,
-) -> Result<u32, SyncError> {
-    let mut exported_count: u32 = 0;
-
-    for tv in all {
-        let Some(file) = tv.files.first() else {
-            continue;
-        };
-
-        let track_id = exported_count + 1;
-        let (artist_id, album_id, genre_id, key_id, label_id, composer_id, remixer_id, artwork_id) =
-            resolve_track_ids(tv, maps);
-
-        let (pioneer_path, filename, file_size) = resolve_device_file_info(file, dest_dir);
-
-        let Ok(file_type) = SupportedFormat::try_from(file.format.as_str()) else {
-            eprintln!(
-                "  Warning: unsupported format '{}' for PDB, skipping {}",
-                file.format, file.file_path
-            );
-            continue;
-        };
-
-        let pdb_track = rekordcrate::pdb::Track::builder()
-            .id(track_id)
-            .title(tv.title.parse()?)
-            .artist_id(artist_id)
-            .album_id(album_id)
-            .genre_id(genre_id)
-            .key_id(key_id)
-            .label_id(label_id)
-            .composer_id(composer_id)
-            .remixer_id(remixer_id)
-            .artwork_id(artwork_id)
-            .file_path(pioneer_path.parse()?)
-            .filename(filename.parse()?)
-            .sample_rate(file.sample_rate)
-            .sample_depth(16)
-            .bitrate(file.bitrate)
-            .duration(tv.duration_secs)
-            .file_size(file_size)
-            .file_type(file_type.into())
-            .tempo(tv.tempo)
-            .year(tv.year)
-            .track_number(tv.track_number)
-            .disc_number(tv.disc_number)
-            .rating(tv.rating)
-            .color(color_index_from_u8(tv.color))
-            .comment(tv.comment.parse()?)
-            .isrc(tv.isrc.parse()?)
-            .lyricist(tv.lyricist.parse()?)
-            .mix_name(tv.mix_name.parse()?)
-            .release_date(tv.release_date.parse()?)
-            .autoload_hotcues("ON".parse()?)
-            .date_added(today.parse()?)
-            .build();
-
-        match pdb.add_row(Row::Plain(PlainRow::Track(pdb_track))) {
-            Ok(_) => exported_count += 1,
-            Err(rekordcrate::Error::TrackRowTooSmall { .. }) => {
-                let msg = format!("Track '{}' skipped in PDB: row too small", file.file_path);
-                eprintln!("  Warning: {msg}");
-                warnings.push(msg);
-            }
-            Err(err) => return Err(err.into()),
-        }
-    }
-
-    Ok(exported_count)
-}
-
-fn resolve_device_file_info(
-    file: &crate::bridge::TrackFileView,
-    dest_dir: &Path,
-) -> (String, String, u32) {
-    let relative_path = device_relative_path(&file.file_path);
-    let relative_path_str = relative_path.to_string_lossy().into_owned();
-    let filename = relative_path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .map_or_else(|| relative_path_str.clone(), ToOwned::to_owned);
-    let file_size = std::fs::metadata(dest_dir.join("Contents").join(&relative_path))
-        .map(|metadata| u32::try_from(metadata.len()).unwrap_or(u32::MAX))
-        .unwrap_or(file.file_size);
-
-    (
-        format!("/Contents/{relative_path_str}"),
-        filename,
-        file_size,
-    )
-}
-
-/// Insert artist rows into the PDB, sorted by their assigned IDs.
-fn insert_artists(pdb: &mut Database<File>, artist_map: &ArtistMap) -> Result<(), SyncError> {
-    let mut artists_sorted: Vec<_> = artist_map.iter().collect();
-    artists_sorted.sort_by_key(|&(_, &id)| id);
-    for (name, &id) in artists_sorted {
-        let artist = Artist::builder().id(id).name(name.parse()?).build();
-        pdb.add_row(Row::Plain(PlainRow::Artist(artist)))?;
-    }
-    Ok(())
-}
-
-/// Insert album rows into the PDB, sorted by their assigned IDs.
-fn insert_albums(pdb: &mut Database<File>, album_map: &AlbumMap) -> Result<(), SyncError> {
-    let mut albums_sorted: Vec<_> = album_map.iter().collect();
-    albums_sorted.sort_by_key(|&(_, &id)| id);
-    for ((album_name, artist_id), &id) in albums_sorted {
-        let album = Album::builder()
-            .id(id)
-            .artist_id(*artist_id)
-            .name(album_name.parse()?)
-            .build();
-        pdb.add_row(Row::Plain(PlainRow::Album(album)))?;
-    }
-    Ok(())
-}
-
-/// Insert genre rows into the PDB, sorted by their assigned IDs.
-fn insert_genres(pdb: &mut Database<File>, genre_map: &GenreMap) -> Result<(), SyncError> {
-    let mut sorted: Vec<_> = genre_map.iter().collect();
-    sorted.sort_by_key(|&(_, &id)| id);
-    for (name, &id) in sorted {
-        let genre = Genre::builder().id(id).name(name.parse()?).build();
-        pdb.add_row(Row::Plain(PlainRow::Genre(genre)))?;
-    }
-    Ok(())
-}
-
-/// Insert key rows into the PDB, sorted by their assigned IDs.
-fn insert_keys(pdb: &mut Database<File>, key_map: &KeyMap) -> Result<(), SyncError> {
-    let mut sorted: Vec<_> = key_map.iter().collect();
-    sorted.sort_by_key(|&(_, &id)| id);
-    for (name, &id) in sorted {
-        let key = Key::builder().id(id).name(name.parse()?).build();
-        pdb.add_row(Row::Plain(PlainRow::Key(key)))?;
-    }
-    Ok(())
-}
-
-/// Insert label rows into the PDB, sorted by their assigned IDs.
-fn insert_labels(pdb: &mut Database<File>, label_map: &LabelMap) -> Result<(), SyncError> {
-    let mut sorted: Vec<_> = label_map.iter().collect();
-    sorted.sort_by_key(|&(_, &id)| id);
-    for (name, &id) in sorted {
-        let label = Label::builder().id(id).name(name.parse()?).build();
-        pdb.add_row(Row::Plain(PlainRow::Label(label)))?;
-    }
-    Ok(())
-}
-
-/// Copy artwork files to PIONEER/Artwork/ on the destination device.
+/// `track_tags` carries, per exported track, the **real** PDB track id (returned by
+/// `DeviceExportWriter::add_track`) and the track's tag labels. A single "My Tags" category
+/// is created, with every unique tag label as a child tag.
 ///
-/// Each unique `artwork_path` (local cache file) is resized and written twice:
-/// - `{id}.jpg`   — 80×80 thumbnail
-/// - `{id}_m.jpg` — 240×240 medium image
-///
-/// Both files are always JPEG regardless of the source format.
-fn copy_artwork_to_device(
-    all: &[TrackView],
-    artwork_map: &ArtworkMap,
+/// No-op (no file written) when no track carries any tag.
+pub(super) fn generate_ext_pdb(
+    track_tags: &[(TrackId, Vec<String>)],
     dest_dir: &Path,
 ) -> Result<(), SyncError> {
-    use image::ImageReader;
-    use image::imageops::FilterType;
-
-    if artwork_map.is_empty() {
-        return Ok(());
-    }
-
-    let art_dest = dest_dir.join("PIONEER").join("Artwork");
-    std::fs::create_dir_all(&art_dest)?;
-
-    let mut copied = std::collections::HashSet::new();
-    for tv in all {
-        let art = &tv.artwork_path;
-        if art.is_empty() || copied.contains(art) {
-            continue;
-        }
-
-        let src = std::path::Path::new(art);
-        if !src.exists() {
-            eprintln!("  Warning: artwork file not found: {art}");
-            continue;
-        }
-
-        let reader = match ImageReader::open(src) {
-            Ok(r) => r,
-            Err(e) => {
-                eprintln!("  Warning: failed to open artwork {art}: {e}");
-                continue;
-            }
-        };
-        let img = match reader.decode() {
-            Ok(i) => i,
-            Err(e) => {
-                eprintln!("  Warning: failed to decode artwork {art}: {e}");
-                continue;
-            }
-        };
-
-        let id = artwork_map[art];
-
-        // 80x80 thumbnail
-        let thumb = img.resize_to_fill(80, 80, FilterType::Lanczos3);
-        thumb.to_rgb8().save(art_dest.join(format!("{id}.jpg")))?;
-
-        // 240x240 medium
-        let medium = img.resize_to_fill(240, 240, FilterType::Lanczos3);
-        medium
-            .to_rgb8()
-            .save(art_dest.join(format!("{id}_m.jpg")))?;
-
-        copied.insert(art.clone());
-    }
-
-    Ok(())
-}
-
-/// Insert artwork rows into the PDB, sorted by their assigned IDs.
-///
-/// The PDB path always references the 80×80 thumbnail (`{id}.jpg`).
-fn insert_artworks(pdb: &mut Database<File>, artwork_map: &ArtworkMap) -> Result<(), SyncError> {
-    let mut sorted: Vec<_> = artwork_map.iter().collect();
-    sorted.sort_by_key(|&(_, &id)| id);
-    for (_, &id) in sorted {
-        let device_path = format!("/Artwork/{id}.jpg");
-        let artwork = Artwork::builder().id(id).path(device_path.parse()?).build();
-        pdb.add_row(Row::Plain(PlainRow::Artwork(artwork)))?;
-    }
-    Ok(())
-}
-
-/// Map a `u8` color value to a [`ColorIndex`].
-fn color_index_from_u8(value: u8) -> ColorIndex {
-    match value {
-        1 => ColorIndex::Pink,
-        2 => ColorIndex::Red,
-        3 => ColorIndex::Orange,
-        4 => ColorIndex::Yellow,
-        5 => ColorIndex::Green,
-        6 => ColorIndex::Aqua,
-        7 => ColorIndex::Blue,
-        8 => ColorIndex::Purple,
-        _ => ColorIndex::None,
-    }
-}
-
-// ── exportExt.pdb (Tags) ────────────────────────────────────────
-
-/// Generate a Pioneer extended PDB (`exportExt.pdb`) with tag/track-tag associations.
-///
-/// Tags are extracted from the unfaceted plain tags on each track (gigtag-decoded hashtags).
-/// A single "My Tags" category is created, with every unique tag label as a child tag.
-pub(super) fn generate_ext_pdb(lib: &Library, dest_dir: &Path) -> Result<(), SyncError> {
-    let all = lib
-        .all_tracks()
-        .map_err(|e| SyncError::Other(e.to_string()))?;
-
-    // Collect unique tag labels → sequential IDs.
-    // ID 1 is reserved for the "My Tags" category.
+    // Collect unique tag labels → sequential ids. Id 1 is reserved for the "My Tags" category.
     let mut tag_map: HashMap<String, u32> = HashMap::new();
-    let mut next_tag_id: u32 = 2;
-    for tv in &all {
-        for label in &tv.tags {
+    let mut next_tag_id = 2u32;
+    for (_, labels) in track_tags {
+        for label in labels {
             if !label.is_empty() && !tag_map.contains_key(label) {
                 tag_map.insert(label.clone(), next_tag_id);
                 next_tag_id += 1;
@@ -523,14 +48,13 @@ pub(super) fn generate_ext_pdb(lib: &Library, dest_dir: &Path) -> Result<(), Syn
     }
 
     if tag_map.is_empty() {
-        // No tags anywhere — skip ext PDB entirely.
         return Ok(());
     }
 
     let rekordbox_dir = dest_dir.join("PIONEER").join("rekordbox");
     std::fs::create_dir_all(&rekordbox_dir)?;
 
-    let table_page_types = vec![
+    let table_page_types = [
         PageType::Ext(ExtPageType::Tag),
         PageType::Ext(ExtPageType::TrackTag),
     ];
@@ -538,8 +62,8 @@ pub(super) fn generate_ext_pdb(lib: &Library, dest_dir: &Path) -> Result<(), Syn
     let ext_file = File::create(&ext_path)?;
     let mut ext_db = Database::create(ext_file, DatabaseType::Ext, &table_page_types)?;
 
-    // Insert "My Tags" category (id = 1).
-    let category = TagOrCategory {
+    // "My Tags" category (id = 1).
+    ext_db.add_row(Row::Ext(ExtRow::Tag(TagOrCategory {
         subtype: Subtype(0x0680),
         index_shift: 0,
         unknown1: 0,
@@ -555,14 +79,13 @@ pub(super) fn generate_ext_pdb(lib: &Library, dest_dir: &Path) -> Result<(), Syn
                 unknown: DeviceSQLString::empty(),
             },
         },
-    };
-    ext_db.add_row(Row::Ext(ExtRow::Tag(category)))?;
+    })))?;
 
-    // Insert individual tags under the category, sorted by ID for deterministic output.
+    // Individual tags under the category, sorted by id for deterministic output.
     let mut tags_sorted: Vec<_> = tag_map.iter().collect();
     tags_sorted.sort_by_key(|(_, id)| **id);
     for (position, (label, id)) in tags_sorted.iter().enumerate() {
-        let tag = TagOrCategory {
+        ext_db.add_row(Row::Ext(ExtRow::Tag(TagOrCategory {
             subtype: Subtype(0x0680),
             index_shift: 0,
             unknown1: 0,
@@ -578,46 +101,23 @@ pub(super) fn generate_ext_pdb(lib: &Library, dest_dir: &Path) -> Result<(), Syn
                     unknown: DeviceSQLString::empty(),
                 },
             },
-        };
-        ext_db.add_row(Row::Ext(ExtRow::Tag(tag)))?;
+        })))?;
     }
 
-    // Build track-ID map: track_view index (1-based) → PDB track ID.
-    // PDB track IDs are 1-based sequential, matching `insert_tracks` in `generate_pdb`.
-    let mut exported_idx: u32 = 0;
-    let mut track_id_map: HashMap<usize, u32> = HashMap::new();
-    for (idx, tv) in all.iter().enumerate() {
-        if tv.files.is_empty() {
-            continue;
-        }
-        if let Ok(fmt) = SupportedFormat::try_from(tv.files[0].format.as_str()) {
-            let _ = fmt;
-            exported_idx += 1;
-            track_id_map.insert(idx, exported_idx);
-        }
-    }
-
-    // Insert track-tag junction rows.
-    for (idx, tv) in all.iter().enumerate() {
-        let Some(&pdb_track_id) = track_id_map.get(&idx) else {
-            continue;
-        };
-        for label in &tv.tags {
+    // Track-tag junction rows, using the real PDB track ids.
+    for (track_id, labels) in track_tags {
+        for label in labels {
             if let Some(&tag_id) = tag_map.get(label) {
-                let track_tag = TrackTag {
-                    track_id: rekordcrate::pdb::TrackId(pdb_track_id),
+                ext_db.add_row(Row::Ext(ExtRow::TrackTag(TrackTag {
+                    track_id: *track_id,
                     tag_id: TagId(tag_id),
                     unknown_const: 3,
-                };
-                ext_db.add_row(Row::Ext(ExtRow::TrackTag(track_tag)))?;
+                })))?;
             }
         }
     }
 
     ext_db.close()?;
-
-    let tag_count = tag_map.len();
-    println!("Ext PDB: {tag_count} tag(s) in 1 category");
-
+    println!("Ext PDB: {} tag(s) in 1 category", tag_map.len());
     Ok(())
 }

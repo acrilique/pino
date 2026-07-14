@@ -162,7 +162,7 @@ pub fn Library(
                 SortKey::Lyricist => a.lyricist.to_lowercase().cmp(&b.lyricist.to_lowercase()),
                 SortKey::MixName => a.mix_name.to_lowercase().cmp(&b.mix_name.to_lowercase()),
                 SortKey::ReleaseDate => a.release_date.cmp(&b.release_date),
-                SortKey::Bpm => a.tempo.cmp(&b.tempo),
+                SortKey::Bpm => a.tempo.total_cmp(&b.tempo),
                 SortKey::Year => a.year.cmp(&b.year),
                 SortKey::TrackNumber => a.track_number.cmp(&b.track_number),
                 SortKey::DiscNumber => a.disc_number.cmp(&b.disc_number),
@@ -251,7 +251,7 @@ pub fn Library(
                 EditColumn::Lyricist => TrackField::Lyricist(new_val.clone()),
                 EditColumn::MixName => TrackField::MixName(new_val.clone()),
                 EditColumn::ReleaseDate => TrackField::ReleaseDate(new_val.clone()),
-                EditColumn::Bpm => TrackField::Tempo(new_val.parse().unwrap_or(0)),
+                EditColumn::Bpm => TrackField::Tempo(new_val.parse().unwrap_or(0.0)),
                 EditColumn::Year => TrackField::Year(new_val.parse().unwrap_or(0)),
                 EditColumn::TrackNumber => TrackField::TrackNumber(new_val.parse().unwrap_or(0)),
                 EditColumn::DiscNumber => TrackField::DiscNumber(new_val.parse().unwrap_or(0)),
@@ -740,7 +740,7 @@ pub fn Library(
                                                             EditableCell { track_id: track_id.clone(), column: EditColumn::ReleaseDate, value: twf.release_date.clone(), editing, edit_value, on_commit: move |()| commit_edit() }
                                                         },
                                                         Column::Bpm => rsx! {
-                                                            EditableCell { track_id: track_id.clone(), column: EditColumn::Bpm, value: if twf.tempo == 0 { String::new() } else { twf.tempo.to_string() }, editing, edit_value, on_commit: move |()| commit_edit() }
+                                                            EditableCell { track_id: track_id.clone(), column: EditColumn::Bpm, value: if twf.tempo == 0.0 { String::new() } else { twf.tempo.to_string() }, editing, edit_value, on_commit: move |()| commit_edit() }
                                                         },
                                                         Column::Year => rsx! {
                                                             EditableCell { track_id: track_id.clone(), column: EditColumn::Year, value: if twf.year == 0 { String::new() } else { twf.year.to_string() }, editing, edit_value, on_commit: move |()| commit_edit() }

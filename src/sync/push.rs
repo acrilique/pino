@@ -9,12 +9,15 @@
 
 use super::{
     SyncError, SyncProgress, SyncWarnings, converted_dir, device_relative_path, file_stem_string,
-    find_file_in_formats, pdb, reconcile_remote_track_ids, remote_db_dir, unique_path_batch,
+    find_file_in_formats, pdb, reconcile_remote_track_ids, remote_db_dir, today, unique_path_batch,
 };
 use crate::bridge::TrackView;
 use crate::ffmpeg;
 use crate::format::SupportedFormat;
 use crate::library::Library;
+use rekordcrate::device::{DeviceExportWriter, Track as DeviceTrack};
+use rekordcrate::pdb::TrackId;
+use rekordcrate::util::ColorIndex;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
@@ -33,14 +36,13 @@ pub struct SyncResult {
     pub synced: u32,
     pub converted: u32,
     pub skipped: u32,
-    pub pdb_skipped: u32,
     pub updated: u32,
     pub warnings: Vec<String>,
 }
 
 impl std::fmt::Display for SyncResult {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        if self.synced == 0 && self.updated == 0 && self.skipped == 0 && self.pdb_skipped == 0 {
+        if self.synced == 0 && self.updated == 0 && self.skipped == 0 {
             return write!(f, "Everything is up to date.");
         }
         write!(f, "Synced {} track(s)", self.synced)?;
@@ -52,9 +54,6 @@ impl std::fmt::Display for SyncResult {
         }
         if self.skipped > 0 {
             write!(f, ", {} skipped (no matching format)", self.skipped)?;
-        }
-        if self.pdb_skipped > 0 {
-            write!(f, ", {} skipped (PDB row too small)", self.pdb_skipped)?;
         }
         write!(f, ".")
     }
@@ -117,13 +116,13 @@ pub fn sync(
     let updated = update_remote_metadata(&local_tracks, &remote_lib, &remote_tracks)?;
 
     if to_sync.is_empty() {
-        let pdb_skipped = pdb::generate_pdb(&remote_lib, dest_dir, &warnings)?;
-        pdb::generate_ext_pdb(&remote_lib, dest_dir)?;
+        // Even with no new files, rebuild the export.pdb so removed tracks leave the device DB.
+        let track_tags = rebuild_device_db(&remote_tracks, dest_dir, &warnings)?;
+        pdb::generate_ext_pdb(&track_tags, dest_dir)?;
         return Ok(SyncResult {
             synced: 0,
             converted: 0,
             skipped: 0,
-            pdb_skipped,
             updated,
             warnings: warnings.into_vec(),
         });
@@ -163,14 +162,14 @@ pub fn sync(
         current: 0,
         total: 1,
     });
-    let pdb_skipped = pdb::generate_pdb(&remote_lib, dest_dir, &warnings)?;
-    pdb::generate_ext_pdb(&remote_lib, dest_dir)?;
+    let remote_tracks = remote_lib.all_tracks()?;
+    let track_tags = rebuild_device_db(&remote_tracks, dest_dir, &warnings)?;
+    pdb::generate_ext_pdb(&track_tags, dest_dir)?;
 
     Ok(SyncResult {
         synced,
         converted,
         skipped,
-        pdb_skipped,
         updated,
         warnings: warnings.into_vec(),
     })
@@ -202,6 +201,8 @@ fn update_remote_metadata(
 }
 
 /// Return `true` if any metadata field differs between `local` and `remote`.
+/// Return `true` if any metadata field differs between `local` and `remote`.
+#[allow(clippy::float_cmp)] // both sides come from the same stored value, so exact eq is intended
 fn metadata_differs(local: &TrackView, remote: &TrackView) -> bool {
     local.title != remote.title
         || local.artist != remote.artist
@@ -479,4 +480,112 @@ fn copy_to_destination(
     }
 
     Ok((synced, converted, skipped))
+}
+
+// ── Device database (export.pdb) ────────────────────────────────────────────
+
+/// Rebuild the device's `export.pdb` from scratch via `DeviceExportWriter`.
+///
+/// Returns `(track_id, tags)` for every track written, so the caller can build the ext PDB with
+/// the real ids instead of reconstructing them by position.
+///
+/// `create()` is used every push (not `open()`), so the export is always a fresh regeneration from
+/// the remote aoide library — removed local tracks leave the device DB.
+/// ponytail: tradeoff — `create()` also (re)writes default `*SETTING.DAT` files, overwriting any
+/// user-customized CDJ settings on the USB. Accepted for the simpler full-rebuild semantics;
+/// upgrade path = preserve setting files before `create()` or add an append-only `open()` path.
+fn rebuild_device_db(
+    remote_tracks: &[TrackView],
+    dest_dir: &Path,
+    warnings: &SyncWarnings,
+) -> Result<Vec<(TrackId, Vec<String>)>, SyncError> {
+    let mut writer = DeviceExportWriter::create(dest_dir)?;
+    let mut track_tags = Vec::new();
+
+    for tv in remote_tracks {
+        let Some(track) = build_device_track(tv, dest_dir) else {
+            warnings.push(format!(
+                "Skipping '{}' in device DB: no supported file format",
+                tv.title
+            ));
+            continue;
+        };
+        match writer.add_track(&track) {
+            Ok(outcome) => track_tags.push((outcome.id, tv.tags.clone())),
+            Err(e) => warnings.push(format!("Failed to add '{}' to device DB: {e}", tv.title)),
+        }
+    }
+
+    writer.close()?;
+    Ok(track_tags)
+}
+
+/// Map a [`TrackView`] to a [`rekordcrate::device::Track`]. `None` if the file format isn't one
+/// pino can export.
+fn build_device_track(tv: &TrackView, dest_dir: &Path) -> Option<DeviceTrack> {
+    let file = tv.files.first()?;
+    let file_type = SupportedFormat::try_from(file.format.as_str()).ok()?;
+
+    let relative = device_relative_path(&file.file_path);
+    let relative_str = relative.to_string_lossy().into_owned();
+    let filename = relative
+        .file_name()
+        .and_then(|n| n.to_str())
+        .map_or_else(|| relative_str.clone(), ToOwned::to_owned);
+    let file_size = std::fs::metadata(dest_dir.join("Contents").join(&relative))
+        .map(|m| u32::try_from(m.len()).unwrap_or(u32::MAX))
+        .unwrap_or(file.file_size);
+
+    // TrackView.tempo is plain BPM (f32); device::Track.tempo is the same, and the writer encodes
+    // centi-BPM internally, so this is a direct copy.
+    Some(DeviceTrack {
+        title: tv.title.clone(),
+        artist: tv.artist.clone(),
+        album: tv.album.clone(),
+        genre: tv.genre.clone(),
+        key: tv.key.clone(),
+        label: tv.label.clone(),
+        composer: tv.composer.clone(),
+        remixer: tv.remixer.clone(),
+        orig_artist: String::new(),
+        comment: tv.comment.clone(),
+        isrc: tv.isrc.clone(),
+        lyricist: tv.lyricist.clone(),
+        mix_name: tv.mix_name.clone(),
+        release_date: tv.release_date.clone(),
+        date_added: today(),
+        file_path: format!("/Contents/{relative_str}"),
+        filename,
+        artwork_path: tv.artwork_path.clone(),
+        message: String::new(),
+        tempo: tv.tempo,
+        bitrate: file.bitrate,
+        sample_rate: file.sample_rate,
+        sample_depth: 16,
+        duration_secs: tv.duration_secs,
+        file_size,
+        track_number: tv.track_number,
+        disc_number: tv.disc_number,
+        year: tv.year,
+        play_count: 0,
+        rating: tv.rating,
+        color: color_index_from_u8(tv.color),
+        file_type: file_type.into(),
+        autoload_hotcues: true,
+    })
+}
+
+/// Map a `u8` color value to a [`ColorIndex`].
+fn color_index_from_u8(value: u8) -> ColorIndex {
+    match value {
+        1 => ColorIndex::Pink,
+        2 => ColorIndex::Red,
+        3 => ColorIndex::Orange,
+        4 => ColorIndex::Yellow,
+        5 => ColorIndex::Green,
+        6 => ColorIndex::Aqua,
+        7 => ColorIndex::Blue,
+        8 => ColorIndex::Purple,
+        _ => ColorIndex::None,
+    }
 }

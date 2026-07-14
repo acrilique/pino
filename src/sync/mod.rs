@@ -48,11 +48,9 @@ impl SyncWarnings {
 pub enum SyncError {
     Library(String),
     Io(std::io::Error),
-    Image(image::ImageError),
     Pdb(rekordcrate::Error),
     NoRemoteDb,
     Overflow,
-    Other(String),
 }
 
 impl fmt::Display for SyncError {
@@ -60,11 +58,9 @@ impl fmt::Display for SyncError {
         match self {
             Self::Library(e) => write!(f, "Library error: {e}"),
             Self::Io(e) => write!(f, "I/O error: {e}"),
-            Self::Image(e) => write!(f, "Image processing error: {e}"),
             Self::Pdb(e) => write!(f, "PDB generation failed: {e}"),
             Self::NoRemoteDb => write!(f, "No pino database found on this device"),
             Self::Overflow => write!(f, "Numeric value exceeds supported range"),
-            Self::Other(e) => write!(f, "{e}"),
         }
     }
 }
@@ -96,12 +92,6 @@ impl From<rekordcrate::pdb::string::StringError> for SyncError {
 impl From<std::num::TryFromIntError> for SyncError {
     fn from(_: std::num::TryFromIntError) -> Self {
         Self::Overflow
-    }
-}
-
-impl From<image::ImageError> for SyncError {
-    fn from(e: image::ImageError) -> Self {
-        Self::Image(e)
     }
 }
 

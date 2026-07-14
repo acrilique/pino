@@ -815,7 +815,7 @@ fn track_richness(track: &TrackView) -> usize {
         !track.release_date.is_empty(),
         !track.artwork_path.is_empty(),
         track.duration_secs > 0,
-        track.tempo > 0,
+        track.tempo > 0.0,
         track.year > 0,
         track.track_number > 0,
         track.disc_number > 0,
