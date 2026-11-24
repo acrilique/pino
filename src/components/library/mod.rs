@@ -534,7 +534,7 @@ pub fn Library(
                     if current < total {
                         let fut = document::eval(
                             r"let el = document.getElementById('track-list');
-                               el ? (el.scrollTop + el.clientHeight >= el.scrollHeight - 200) : false",
+                               return el ? (el.scrollTop + el.clientHeight >= el.scrollHeight - 200) : false",
                         );
                         spawn(async move {
                             if let Ok(near_bottom) = fut.await
