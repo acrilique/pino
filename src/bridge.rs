@@ -121,7 +121,7 @@ pub fn flatten(entity: &Entity) -> TrackView {
         artist: track.track_artist().unwrap_or_default().to_owned(),
         album: track.album_title().unwrap_or_default().to_owned(),
         genre: facet_label(track, FACET_ID_GENRE),
-        composer: track.track_composer().unwrap_or_default().to_owned(),
+        composer: summary_actor_name(track, Role::Composer),
         label: track.publisher.clone().unwrap_or_default(),
         remixer: summary_actor_name(track, Role::Remixer),
         key: track

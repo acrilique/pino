@@ -204,8 +204,7 @@ impl Library {
                 bridge::apply_edit(entity, field.clone());
 
                 let track = entity.body.track.clone();
-                let (validated, _invalidities) = aoide::usecases::track::validate_input(track)
-                    .map_err(|e| anyhow!("validation failed: {e:?}"))?;
+                let (validated, _invalidities) = aoide::usecases::track::validate_input(track);
                 validated_batch.push(validated);
             }
 
@@ -428,8 +427,7 @@ impl Library {
                 crate::bridge::apply_all_fields(entity, &view);
 
                 let track = entity.body.track.clone();
-                let (validated, _invalidities) = aoide::usecases::track::validate_input(track)
-                    .map_err(|e| anyhow!("validation failed: {e:?}"))?;
+                let (validated, _invalidities) = aoide::usecases::track::validate_input(track);
                 validated_batch.push(validated);
             }
 
@@ -491,8 +489,7 @@ impl Library {
                 bridge::set_track_id(&mut entity.body.track, &new_track_id);
 
                 let track = entity.body.track.clone();
-                let (validated, _invalidities) = aoide::usecases::track::validate_input(track)
-                    .map_err(|e| anyhow!("validation failed during ID reassignment: {e:?}"))?;
+                let (validated, _invalidities) = aoide::usecases::track::validate_input(track);
                 validated_batch.push(validated);
             }
 
@@ -635,8 +632,7 @@ impl Library {
                 bridge::set_track_id(&mut entity.body.track, &entity_uid);
 
                 let track = entity.body.track.clone();
-                let (validated, _invalidities) = aoide::usecases::track::validate_input(track)
-                    .map_err(|e| anyhow!("validation failed during ID backfill: {e:?}"))?;
+                let (validated, _invalidities) = aoide::usecases::track::validate_input(track);
                 validated_batch.push(validated);
             }
 
@@ -746,14 +742,8 @@ fn process_single_import(
         bridge::apply_view(&mut track, metadata);
     }
 
-    // Validate; skip this file on failure rather than aborting the whole batch.
-    match aoide::usecases::track::validate_input(track) {
-        Ok((validated, _)) => ImportOutcome::Validated(Box::new(validated)),
-        Err(e) => ImportOutcome::Warning(format!(
-            "{}: validation failed ({e:?})",
-            canonical.display()
-        )),
-    }
+    let (validated, _invalidities) = aoide::usecases::track::validate_input(track);
+    ImportOutcome::Validated(Box::new(validated))
 }
 
 fn group_track_views(flattened: Vec<TrackView>) -> Vec<TrackView> {
