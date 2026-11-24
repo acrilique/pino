@@ -4351,16 +4351,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "quick-xml"
-version = "0.40.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2474bd2e5029e7ccb6abb2ba48cf2383a333851dedf495901544281590c7da7f"
-dependencies = [
- "memchr",
- "serde",
-]
-
-[[package]]
 name = "quote"
 version = "1.0.45"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4662,18 +4652,15 @@ checksum = "dc897dd8d9e8bd1ed8cdad82b5966c3e0ecae09fb1907d58efaa013543185d0a"
 [[package]]
 name = "rekordcrate"
 version = "0.3.0"
-source = "git+https://github.com/acrilique/rekordcrate?branch=feat%2Fdevice-export#051c28cad9cff6844481cc1cf65c0f37e9807eaf"
+source = "git+https://github.com/Holzhaus/rekordcrate?rev=82a6077bda95b072186aa551af27e2135217a30d#82a6077bda95b072186aa551af27e2135217a30d"
 dependencies = [
  "binrw",
- "chrono",
  "crc16",
  "fallible-iterator",
  "glob",
  "image",
  "modular-bitfield",
  "parse-display",
- "quick-xml 0.40.1",
- "serde",
  "thiserror 2.0.18",
 ]
 
@@ -6200,7 +6187,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9c324a910fd86ebdc364a3e61ec1f11737d3b1d6c273c0239ee8ff4bc0d24b4a"
 dependencies = [
  "proc-macro2",
- "quick-xml 0.39.2",
+ "quick-xml",
  "quote",
 ]
 

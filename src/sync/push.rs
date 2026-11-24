@@ -9,14 +9,13 @@
 
 use super::{
     SyncError, SyncProgress, SyncWarnings, converted_dir, device_relative_path, file_stem_string,
-    find_file_in_formats, pdb, reconcile_remote_track_ids, remote_db_dir, today, unique_path_batch,
+    find_file_in_formats, reconcile_remote_track_ids, remote_db_dir, today, unique_path_batch,
 };
 use crate::bridge::TrackView;
 use crate::ffmpeg;
 use crate::format::SupportedFormat;
 use crate::library::Library;
-use rekordcrate::device::{DeviceExportWriter, Track as DeviceTrack};
-use rekordcrate::pdb::TrackId;
+use rekordcrate::device::{DeviceExport, TagCategoryId, Track as DeviceTrack};
 use rekordcrate::util::ColorIndex;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -117,8 +116,7 @@ pub fn sync(
 
     if to_sync.is_empty() {
         // Even with no new files, rebuild the export.pdb so removed tracks leave the device DB.
-        let track_tags = rebuild_device_db(&remote_tracks, dest_dir, &warnings)?;
-        pdb::generate_ext_pdb(&track_tags, dest_dir)?;
+        rebuild_device_db(&remote_tracks, dest_dir, &warnings)?;
         return Ok(SyncResult {
             synced: 0,
             converted: 0,
@@ -163,8 +161,7 @@ pub fn sync(
         total: 1,
     });
     let remote_tracks = remote_lib.all_tracks()?;
-    let track_tags = rebuild_device_db(&remote_tracks, dest_dir, &warnings)?;
-    pdb::generate_ext_pdb(&track_tags, dest_dir)?;
+    rebuild_device_db(&remote_tracks, dest_dir, &warnings)?;
 
     Ok(SyncResult {
         synced,
@@ -484,10 +481,9 @@ fn copy_to_destination(
 
 // ── Device database (export.pdb) ────────────────────────────────────────────
 
-/// Rebuild the device's `export.pdb` from scratch via `DeviceExportWriter`.
+/// Rebuild the device's `export.pdb` and `exportExt.pdb` from scratch via `DeviceExport`.
 ///
-/// Returns `(track_id, tags)` for every track written, so the caller can build the ext PDB with
-/// the real ids instead of reconstructing them by position.
+/// Tags are applied per track through the export handle, which owns the ext PDB lifecycle.
 ///
 /// `create()` is used every push (not `open()`), so the export is always a fresh regeneration from
 /// the remote aoide library — removed local tracks leave the device DB.
@@ -498,9 +494,10 @@ fn rebuild_device_db(
     remote_tracks: &[TrackView],
     dest_dir: &Path,
     warnings: &SyncWarnings,
-) -> Result<Vec<(TrackId, Vec<String>)>, SyncError> {
-    let mut writer = DeviceExportWriter::create(dest_dir)?;
-    let mut track_tags = Vec::new();
+) -> Result<(), SyncError> {
+    let mut export = DeviceExport::create(dest_dir)?;
+    // Created lazily on first use so an export with no tags produces no exportExt.pdb.
+    let mut tag_category = None;
 
     for tv in remote_tracks {
         let Some(track) = build_device_track(tv, dest_dir) else {
@@ -510,14 +507,26 @@ fn rebuild_device_db(
             ));
             continue;
         };
-        match writer.add_track(&track) {
-            Ok(outcome) => track_tags.push((outcome.id, tv.tags.clone())),
+        match export.add_track(&track) {
+            Ok(outcome) => {
+                if !tv.tags.is_empty() {
+                    let cat = *tag_category.get_or_insert_with(|| {
+                        export.create_tag_category("My Tags").unwrap_or_else(|e| {
+                            warnings.push(format!("Failed to create tag category: {e}"));
+                            // A dummy id; add_tags_to_track will reject it, but the warning is
+                            // already logged. This path is unreachable for valid device paths.
+                            TagCategoryId(0)
+                        })
+                    });
+                    export.add_tags_to_track(outcome.id, cat, &tv.tags)?;
+                }
+            }
             Err(e) => warnings.push(format!("Failed to add '{}' to device DB: {e}", tv.title)),
         }
     }
 
-    writer.close()?;
-    Ok(track_tags)
+    export.save()?;
+    Ok(())
 }
 
 /// Map a [`TrackView`] to a [`rekordcrate::device::Track`]. `None` if the file format isn't one
@@ -568,7 +577,7 @@ fn build_device_track(tv: &TrackView, dest_dir: &Path) -> Option<DeviceTrack> {
         disc_number: tv.disc_number,
         year: tv.year,
         play_count: 0,
-        rating: tv.rating,
+        rating: tv.rating.into(),
         color: color_index_from_u8(tv.color),
         file_type: file_type.into(),
         autoload_hotcues: true,

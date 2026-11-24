@@ -8,7 +8,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 mod import;
-mod pdb;
 mod pull;
 mod push;
 
