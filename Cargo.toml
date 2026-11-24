@@ -19,7 +19,7 @@ dirs = "6"
 serde = { version = "1", features = ["derive"] }
 toml = "1.1.2"
 open = "5"
-dioxus-primitives = { git = "https://github.com/DioxusLabs/components", version = "0.0.1", default-features = false }
+dioxus-primitives = { git = "https://github.com/DioxusLabs/components", rev = "09d6a913cd1fbcd258b6a5d97bd780b1808b5c0a", version = "0.0.1", default-features = false }
 uuid = { version = "1", features = ["v4"] }
 rayon = "1"
 
