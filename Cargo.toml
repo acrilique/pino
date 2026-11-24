@@ -13,9 +13,9 @@ rekordcrate = { git = "https://github.com/Holzhaus/rekordcrate", rev = "82a6077b
 unicode-normalization = "0.1"
 chrono = "0.4.44"
 dioxus = { version = "0.7.5", features = ["desktop"] }
-rfd = "0.17.2"
+rfd = "0.18"
 tokio = { version = "1", features = ["sync", "rt"] }
-dirs = "6"
+dirs = "7"
 serde = { version = "1", features = ["derive"] }
 toml = "1.1.2"
 open = "5"
