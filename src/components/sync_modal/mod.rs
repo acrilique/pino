@@ -85,9 +85,7 @@ impl SyncState {
             progress_current: Signal::new(0),
             progress_total: Signal::new(0),
             jobs: Signal::new(
-                std::thread::available_parallelism()
-                    .map(std::num::NonZero::get)
-                    .unwrap_or(4),
+                std::thread::available_parallelism().map_or(4, std::num::NonZero::get),
             ),
             sync_status: Signal::new(None),
             checking: Signal::new(false),

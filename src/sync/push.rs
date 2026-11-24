@@ -542,8 +542,9 @@ fn build_device_track(tv: &TrackView, dest_dir: &Path) -> Option<DeviceTrack> {
         .and_then(|n| n.to_str())
         .map_or_else(|| relative_str.clone(), ToOwned::to_owned);
     let file_size = std::fs::metadata(dest_dir.join("Contents").join(&relative))
-        .map(|m| u32::try_from(m.len()).unwrap_or(u32::MAX))
-        .unwrap_or(file.file_size);
+        .map_or(file.file_size, |m| {
+            u32::try_from(m.len()).unwrap_or(u32::MAX)
+        });
 
     // TrackView.tempo is plain BPM (f32); device::Track.tempo is the same, and the writer encodes
     // centi-BPM internally, so this is a direct copy.

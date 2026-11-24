@@ -173,13 +173,11 @@ pub fn Library(
                     let a_name = a
                         .files
                         .first()
-                        .map(|f| file_basename(&f.file_path))
-                        .unwrap_or_default();
+                        .map_or_default(|f| file_basename(&f.file_path));
                     let b_name = b
                         .files
                         .first()
-                        .map(|f| file_basename(&f.file_path))
-                        .unwrap_or_default();
+                        .map_or_default(|f| file_basename(&f.file_path));
                     a_name.to_lowercase().cmp(&b_name.to_lowercase())
                 }
                 SortKey::Tags => {

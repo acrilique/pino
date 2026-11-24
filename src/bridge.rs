@@ -127,8 +127,7 @@ pub fn flatten(entity: &Entity) -> TrackView {
         key: track
             .metrics
             .key_signature
-            .map(|ks| ks.code().as_canonical_str().to_owned())
-            .unwrap_or_default(),
+            .map_or_default(|ks| ks.code().as_canonical_str().to_owned()),
         comment: facet_label(track, FACET_ID_COMMENT),
         isrc: facet_label(track, FACET_ID_ISRC),
         lyricist: summary_actor_name(track, Role::Lyricist),

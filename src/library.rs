@@ -221,7 +221,7 @@ impl Library {
                 self.env.db_gatekeeper(),
                 self.collection_uid.clone(),
                 params,
-                validated_batch.into_iter(),
+                validated_batch,
             )
             .await
             .context("replace tracks after edit")?;
@@ -384,7 +384,7 @@ impl Library {
                 self.env.db_gatekeeper(),
                 self.collection_uid.clone(),
                 params,
-                validated_batch.into_iter(),
+                validated_batch,
             )
             .await
             .context("batch store imported tracks")
@@ -445,7 +445,7 @@ impl Library {
                 self.env.db_gatekeeper(),
                 self.collection_uid.clone(),
                 params,
-                validated_batch.into_iter(),
+                validated_batch,
             )
             .await
             .context("replace tracks after overwrite")?;
@@ -508,7 +508,7 @@ impl Library {
                 self.env.db_gatekeeper(),
                 self.collection_uid.clone(),
                 params,
-                validated_batch.into_iter(),
+                validated_batch,
             )
             .await
             .context("reassign logical track IDs")?;
@@ -656,7 +656,7 @@ impl Library {
                 self.env.db_gatekeeper(),
                 self.collection_uid.clone(),
                 params,
-                validated_batch.into_iter(),
+                validated_batch,
             )
             .await
             .context("backfill logical track IDs")?;
