@@ -1,8 +1,16 @@
+// Copyright (c) 2026 Lluc Simó Margalef <lluc.simo@protonmail.com>
+//
+// This program is free software: you can redistribute it and/or modify it under
+// the terms of the GNU Affero General Public License as published by the Free
+// Software Foundation, either version 3 of the License, or (at your option) any
+// later version.
+//
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 //! Bridge between aoide track entities and Pino's flat view model.
 //!
-//! UI never sees aoide types directly. [`TrackView`] provides the same
-//! flat shape as the old `Track + TrackFile` structs so the UI layer
-//! needs minimal changes during migration.
+//! UI never sees aoide types directly: [`TrackView`] is the flat shape it
+//! renders, and [`TrackField`] is the edit it sends back.
 
 use std::path::Path;
 
@@ -32,10 +40,7 @@ const PINO_RATING_FACET: &str = "pino.rating";
 // ── View model ───────────────────────────────────────────────────
 
 /// Flat track representation for the UI layer.
-///
-/// Same shape as the old `Track + TrackFile` so UI components need
-/// minimal changes during migration.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 #[allow(clippy::struct_field_names)]
 pub struct TrackView {
     pub id: String,
@@ -66,7 +71,7 @@ pub struct TrackView {
 }
 
 /// Flat file metadata for one audio file.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct TrackFileView {
     pub format: String,
     pub file_path: String,
@@ -166,36 +171,30 @@ pub fn flatten(entity: &Entity) -> TrackView {
     }
 }
 
-// ── Apply edit: TrackField → Entity mutation ─────────────────────
-
-/// Apply a UI edit to the track inside an entity.
-#[allow(clippy::cast_possible_truncation)]
-pub fn apply_edit(entity: &mut Entity, field: TrackField) {
-    apply_track_field(&mut entity.body.track, field);
-}
+// ── Apply edit: TrackField → Track mutation ──────────────────────
 
 /// Apply every user-editable metadata field from a [`TrackView`] to a track.
 pub fn apply_view(track: &mut track::Track, view: &TrackView) {
-    apply_track_field(track, TrackField::Title(view.title.clone()));
-    apply_track_field(track, TrackField::Artist(view.artist.clone()));
-    apply_track_field(track, TrackField::Album(view.album.clone()));
-    apply_track_field(track, TrackField::Genre(view.genre.clone()));
-    apply_track_field(track, TrackField::Composer(view.composer.clone()));
-    apply_track_field(track, TrackField::Label(view.label.clone()));
-    apply_track_field(track, TrackField::Remixer(view.remixer.clone()));
-    apply_track_field(track, TrackField::Key(view.key.clone()));
-    apply_track_field(track, TrackField::Comment(view.comment.clone()));
-    apply_track_field(track, TrackField::Isrc(view.isrc.clone()));
-    apply_track_field(track, TrackField::Lyricist(view.lyricist.clone()));
-    apply_track_field(track, TrackField::MixName(view.mix_name.clone()));
-    apply_track_field(track, TrackField::ReleaseDate(view.release_date.clone()));
-    apply_track_field(track, TrackField::Tempo(view.tempo));
-    apply_track_field(track, TrackField::Year(view.year));
-    apply_track_field(track, TrackField::TrackNumber(view.track_number));
-    apply_track_field(track, TrackField::DiscNumber(view.disc_number));
-    apply_track_field(track, TrackField::Rating(view.rating));
-    apply_track_field(track, TrackField::Color(view.color));
-    apply_track_field(track, TrackField::Tags(view.tags.clone()));
+    apply_field(track, TrackField::Title(view.title.clone()));
+    apply_field(track, TrackField::Artist(view.artist.clone()));
+    apply_field(track, TrackField::Album(view.album.clone()));
+    apply_field(track, TrackField::Genre(view.genre.clone()));
+    apply_field(track, TrackField::Composer(view.composer.clone()));
+    apply_field(track, TrackField::Label(view.label.clone()));
+    apply_field(track, TrackField::Remixer(view.remixer.clone()));
+    apply_field(track, TrackField::Key(view.key.clone()));
+    apply_field(track, TrackField::Comment(view.comment.clone()));
+    apply_field(track, TrackField::Isrc(view.isrc.clone()));
+    apply_field(track, TrackField::Lyricist(view.lyricist.clone()));
+    apply_field(track, TrackField::MixName(view.mix_name.clone()));
+    apply_field(track, TrackField::ReleaseDate(view.release_date.clone()));
+    apply_field(track, TrackField::Tempo(view.tempo));
+    apply_field(track, TrackField::Year(view.year));
+    apply_field(track, TrackField::TrackNumber(view.track_number));
+    apply_field(track, TrackField::DiscNumber(view.disc_number));
+    apply_field(track, TrackField::Rating(view.rating));
+    apply_field(track, TrackField::Color(view.color));
+    apply_field(track, TrackField::Tags(view.tags.clone()));
 }
 
 /// Return logical Pino track ID, falling back to aoide's entity UID.
@@ -226,7 +225,8 @@ pub fn content_path(entity: &Entity) -> String {
         .to_owned()
 }
 
-fn apply_track_field(track: &mut track::Track, field: TrackField) {
+/// Apply a single UI edit to a track.
+pub fn apply_field(track: &mut track::Track, field: TrackField) {
     match field {
         TrackField::Title(v) => {
             track.set_track_title(v);
@@ -436,13 +436,6 @@ fn pino_rating_facet() -> FacetId {
     FacetId::from_unchecked(PINO_RATING_FACET)
 }
 
-/// Apply every field from a [`TrackView`] to the track inside an entity.
-///
-/// Used when overwriting metadata on the remote library from a local [`TrackView`].
-pub fn apply_all_fields(entity: &mut Entity, view: &TrackView) {
-    apply_view(&mut entity.body.track, view);
-}
-
 /// Parse a string into `DateOrDateTime`, trying year-only and full date formats.
 fn parse_date_or_datetime(s: &str) -> Option<DateOrDateTime> {
     if s.is_empty() {
@@ -468,4 +461,35 @@ fn parse_date_or_datetime(s: &str) -> Option<DateOrDateTime> {
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn date(yyyymmdd: i32) -> DateOrDateTime {
+        DateOrDateTime::from(YyyyMmDdDate::new_unchecked(yyyymmdd))
+    }
+
+    #[test]
+    fn parse_date_accepts_supported_shapes() {
+        assert_eq!(
+            parse_date_or_datetime("2024"),
+            Some(DateOrDateTime::from(YyyyMmDdDate::from_year(2024)))
+        );
+        assert_eq!(parse_date_or_datetime("20240115"), Some(date(20_240_115)));
+        assert_eq!(parse_date_or_datetime("2024-01-15"), Some(date(20_240_115)));
+    }
+
+    #[test]
+    fn parse_date_rejects_empty_and_text() {
+        assert_eq!(parse_date_or_datetime(""), None);
+        assert_eq!(parse_date_or_datetime("soon"), None);
+    }
+
+    #[test]
+    fn format_is_lowercased_extension() {
+        assert_eq!(format_from_path("/music/Track.MP3"), "mp3");
+        assert_eq!(format_from_path("/music/no_extension"), "");
+    }
 }

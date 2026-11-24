@@ -315,3 +315,104 @@ pub(crate) fn unique_path_batch(path: &Path, claimed: &mut HashSet<PathBuf>) -> 
         n += 1;
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::bridge::{TrackFileView, TrackView};
+
+    fn file(path: &str, format: &str) -> TrackFileView {
+        TrackFileView {
+            file_path: path.to_owned(),
+            format: format.to_owned(),
+            ..TrackFileView::default()
+        }
+    }
+
+    #[test]
+    fn device_relative_path_keeps_relative_paths() {
+        assert_eq!(device_relative_path("a.mp3"), Path::new("a.mp3"));
+        assert_eq!(device_relative_path("sub/a.mp3"), Path::new("sub/a.mp3"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn device_relative_path_strips_up_to_contents() {
+        assert_eq!(
+            device_relative_path("/media/usb/Contents/sub/a.mp3"),
+            Path::new("sub/a.mp3")
+        );
+        // Without a `Contents` component only the filename is kept.
+        assert_eq!(device_relative_path("/music/a.mp3"), Path::new("a.mp3"));
+    }
+
+    #[test]
+    fn find_file_follows_format_priority() {
+        let files = [file("a.flac", "flac"), file("a.mp3", "mp3")];
+        let found = find_file_in_formats(&files, &[SupportedFormat::Mp3, SupportedFormat::Flac]);
+        assert_eq!(found.map(|f| f.file_path.as_str()), Some("a.mp3"));
+        assert!(find_file_in_formats(&files, &[SupportedFormat::Wav]).is_none());
+    }
+
+    #[test]
+    fn identity_key_prefers_isrc() {
+        let track = TrackView {
+            isrc: " GBAYE0601498 ".to_owned(),
+            duration_secs: 200,
+            ..TrackView::default()
+        };
+        assert_eq!(
+            track_identity_key(&track).as_deref(),
+            Some("isrc:gbaye0601498:200")
+        );
+    }
+
+    #[test]
+    fn identity_key_from_metadata_ignores_case_and_padding() {
+        let a = TrackView {
+            title: "One More Time".to_owned(),
+            artist: "Daft Punk".to_owned(),
+            duration_secs: 320,
+            ..TrackView::default()
+        };
+        let b = TrackView {
+            title: " one more time".to_owned(),
+            artist: "DAFT PUNK ".to_owned(),
+            duration_secs: 320,
+            ..TrackView::default()
+        };
+        assert!(track_identity_key(&a).is_some());
+        assert_eq!(track_identity_key(&a), track_identity_key(&b));
+
+        let longer = TrackView {
+            duration_secs: 321,
+            ..a.clone()
+        };
+        assert_ne!(track_identity_key(&a), track_identity_key(&longer));
+    }
+
+    #[test]
+    fn identity_key_needs_title_artist_and_duration() {
+        let track = TrackView {
+            title: "Untitled".to_owned(),
+            duration_secs: 100,
+            ..TrackView::default()
+        };
+        assert_eq!(track_identity_key(&track), None);
+    }
+
+    #[test]
+    fn unique_path_batch_avoids_claimed_paths() {
+        let base = Path::new("/nonexistent-pino-test-dir/track.mp3");
+        let mut claimed = HashSet::new();
+        assert_eq!(unique_path_batch(base, &mut claimed), base);
+        assert_eq!(
+            unique_path_batch(base, &mut claimed),
+            Path::new("/nonexistent-pino-test-dir/track_2.mp3")
+        );
+        assert_eq!(
+            unique_path_batch(base, &mut claimed),
+            Path::new("/nonexistent-pino-test-dir/track_3.mp3")
+        );
+    }
+}

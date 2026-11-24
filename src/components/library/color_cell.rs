@@ -22,16 +22,7 @@ pub const TRACK_COLORS: &[(u8, &str, &str)] = &[
 ];
 
 #[component]
-pub fn ColorCell(
-    track_id: String,
-    value: u8,
-    on_change: EventHandler<u8>,
-    #[props(default)] hidden: bool,
-) -> Element {
-    if hidden {
-        return rsx! {};
-    }
-
+pub fn ColorCell(value: u8, on_change: EventHandler<u8>) -> Element {
     let mut open = use_signal(|| None::<(f64, f64)>);
 
     let current = TRACK_COLORS

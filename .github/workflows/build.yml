@@ -9,6 +9,27 @@ on:
 permissions: {}
 
 jobs:
+    test:
+        runs-on: ubuntu-latest
+        permissions:
+            contents: read
+        steps:
+            - name: Checkout code
+              uses: actions/checkout@v6
+              with:
+                  persist-credentials: false
+
+            - name: Install Linux dependencies
+              run: |
+                  sudo apt-get update
+                  sudo apt-get install -y build-essential libwebkit2gtk-4.1-dev libayatana-appindicator3-dev curl wget file libxdo-dev libssl-dev librsvg2-dev lld
+
+            - name: Print Rust version
+              run: rustc -vV
+
+            - name: Run tests
+              run: cargo test --locked
+
     build:
         strategy:
             matrix:

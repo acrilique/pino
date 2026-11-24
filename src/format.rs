@@ -58,18 +58,34 @@ impl From<SupportedFormat> for FileType {
     }
 }
 
-impl SupportedFormat {
-    pub const ALL: [SupportedFormat; 5] = [
-        SupportedFormat::Mp3,
-        SupportedFormat::Wav,
-        SupportedFormat::Aiff,
-        SupportedFormat::M4a,
-        SupportedFormat::Flac,
-    ];
-}
-
 impl fmt::Display for SupportedFormat {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str((*self).into())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extension_round_trips() {
+        for fmt in [
+            SupportedFormat::Mp3,
+            SupportedFormat::Wav,
+            SupportedFormat::Aiff,
+            SupportedFormat::M4a,
+            SupportedFormat::Flac,
+        ] {
+            let ext: &str = fmt.into();
+            assert_eq!(SupportedFormat::try_from(ext), Ok(fmt));
+        }
+    }
+
+    #[test]
+    fn extension_aliases_and_case() {
+        assert_eq!(SupportedFormat::try_from("AIF"), Ok(SupportedFormat::Aiff));
+        assert_eq!(SupportedFormat::try_from("aac"), Ok(SupportedFormat::M4a));
+        assert!(SupportedFormat::try_from("ogg").is_err());
     }
 }

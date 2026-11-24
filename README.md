@@ -9,7 +9,7 @@ Built with [Dioxus](https://dioxuslabs.com/).
 - SQLite-backed music library
 - Audio format conversion via FFmpeg (MP3, M4A, etc.)
 - Bidirectional sync with USB devices (pull from device, push to device)
-- Metadata extraction (currently just title, artist and album)
+- Metadata extraction from audio file tags, with in-app editing written back to the files
 
 ## Installation
 

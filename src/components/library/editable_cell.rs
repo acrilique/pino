@@ -33,7 +33,7 @@ pub enum EditColumn {
 }
 
 impl EditColumn {
-    /// Returns `None` for free-text columns, or a validation function for numeric ones.
+    /// Whether `input` is acceptable for this column; free-text columns accept anything.
     fn validate(self, input: &str) -> bool {
         match self {
             EditColumn::Bpm | EditColumn::TrackNumber => {
@@ -62,12 +62,7 @@ pub fn EditableCell(
     mut editing: Signal<Option<(String, EditColumn)>>,
     mut edit_value: Signal<String>,
     on_commit: EventHandler,
-    #[props(default)] hidden: bool,
 ) -> Element {
-    if hidden {
-        return rsx! {};
-    }
-
     let col_suffix = match column {
         EditColumn::Title => "title",
         EditColumn::Artist => "artist",

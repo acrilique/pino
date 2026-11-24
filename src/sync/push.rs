@@ -198,7 +198,6 @@ fn update_remote_metadata(
 }
 
 /// Return `true` if any metadata field differs between `local` and `remote`.
-/// Return `true` if any metadata field differs between `local` and `remote`.
 #[allow(clippy::float_cmp)] // both sides come from the same stored value, so exact eq is intended
 fn metadata_differs(local: &TrackView, remote: &TrackView) -> bool {
     local.title != remote.title
@@ -597,5 +596,56 @@ fn color_index_from_u8(value: u8) -> ColorIndex {
         7 => ColorIndex::Blue,
         8 => ColorIndex::Purple,
         _ => ColorIndex::None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn result(synced: u32, converted: u32, skipped: u32, updated: u32) -> SyncResult {
+        SyncResult {
+            synced,
+            converted,
+            skipped,
+            updated,
+            warnings: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn sync_result_summary() {
+        assert_eq!(result(0, 0, 0, 0).to_string(), "Everything is up to date.");
+        assert_eq!(
+            result(3, 1, 2, 4).to_string(),
+            "Synced 3 track(s) (1 converted), 4 updated, 2 skipped (no matching format)."
+        );
+    }
+
+    #[test]
+    fn metadata_differs_ignores_files_and_id() {
+        let local = TrackView {
+            id: "local".to_owned(),
+            title: "Song".to_owned(),
+            tags: vec!["peak".to_owned()],
+            ..TrackView::default()
+        };
+        let mut remote = TrackView {
+            id: "remote".to_owned(),
+            files: vec![crate::bridge::TrackFileView::default()],
+            ..local.clone()
+        };
+        assert!(!metadata_differs(&local, &remote));
+
+        remote.tags.clear();
+        assert!(metadata_differs(&local, &remote));
+    }
+
+    #[test]
+    fn color_index_mapping() {
+        assert!(matches!(color_index_from_u8(0), ColorIndex::None));
+        assert!(matches!(color_index_from_u8(1), ColorIndex::Pink));
+        assert!(matches!(color_index_from_u8(8), ColorIndex::Purple));
+        assert!(matches!(color_index_from_u8(9), ColorIndex::None));
     }
 }

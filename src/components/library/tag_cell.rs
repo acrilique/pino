@@ -21,12 +21,7 @@ pub fn TagCell(
     tags: Vec<String>,
     mut editing: Signal<Option<(String, EditColumn)>>,
     on_change: EventHandler<Vec<String>>,
-    #[props(default)] hidden: bool,
 ) -> Element {
-    if hidden {
-        return rsx! {};
-    }
-
     let mut draft = use_signal(String::new);
     let mut local_tags = use_signal(|| tags.clone());
     let input_id = format!("tags-{track_id}");

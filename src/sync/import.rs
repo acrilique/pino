@@ -8,40 +8,30 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 use super::SyncError;
-use crate::format::SupportedFormat;
 use crate::library::Library;
 use crate::sync::SyncProgress;
 use std::path::{Path, PathBuf};
 
-fn is_known_audio_extension(ext: &str) -> bool {
-    matches!(
-        ext,
-        "mp3" | "wav" | "aiff" | "aif" | "aac" | "m4a" | "flac" | "ogg" | "wma" | "opus"
-    )
+/// Extensions accepted for import: every [`SupportedFormat`](crate::format::SupportedFormat)
+/// plus formats that can only reach a device through conversion.
+fn is_audio_file(path: &Path) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| {
+            matches!(
+                ext.to_ascii_lowercase().as_str(),
+                "mp3" | "wav" | "aiff" | "aif" | "aac" | "m4a" | "flac" | "ogg" | "wma" | "opus"
+            )
+        })
 }
 
-fn find_audio_files(
-    dir: &Path,
-    supported: &[SupportedFormat],
-    convert: bool,
-    files: &mut Vec<(PathBuf, Option<SupportedFormat>)>,
-) -> std::io::Result<()> {
+fn find_audio_files(dir: &Path, files: &mut Vec<PathBuf>) -> std::io::Result<()> {
     for entry in std::fs::read_dir(dir)? {
-        let entry = entry?;
-        let path = entry.path();
+        let path = entry?.path();
         if path.is_dir() {
-            find_audio_files(&path, supported, convert, files)?;
-        } else if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
-            let ext_lower = ext.to_ascii_lowercase();
-            if let Ok(fmt) = SupportedFormat::try_from(ext_lower.as_str()) {
-                if supported.contains(&fmt) {
-                    files.push((path, Some(fmt)));
-                } else if convert {
-                    files.push((path, None));
-                }
-            } else if convert && is_known_audio_extension(&ext_lower) {
-                files.push((path, None));
-            }
+            find_audio_files(&path, files)?;
+        } else if is_audio_file(&path) {
+            files.push(path);
         }
     }
     Ok(())
@@ -56,10 +46,10 @@ pub struct ImportResult {
 /// Import a list of audio file paths into the library using aoide-media-file.
 fn import_tracks(
     lib: &Library,
-    audio_files: &[(PathBuf, Option<SupportedFormat>)],
+    mut paths: Vec<PathBuf>,
     on_progress: &(dyn Fn(SyncProgress) + Sync),
 ) -> ImportResult {
-    let paths: Vec<PathBuf> = audio_files.iter().map(|(p, _)| p.clone()).collect();
+    paths.sort();
 
     let progress_cb = |current: u32, total: u32| {
         on_progress(SyncProgress {
@@ -78,17 +68,6 @@ fn import_tracks(
     }
 }
 
-fn classify_file(path: PathBuf) -> Option<(PathBuf, Option<SupportedFormat>)> {
-    let ext = path.extension()?.to_str()?.to_ascii_lowercase();
-    if let Ok(fmt) = SupportedFormat::try_from(ext.as_str()) {
-        Some((path, Some(fmt)))
-    } else if is_known_audio_extension(&ext) {
-        Some((path, None))
-    } else {
-        None
-    }
-}
-
 /// Scan a folder and import all audio files into the library.
 pub fn import_folder(
     lib: &Library,
@@ -100,12 +79,10 @@ pub fn import_folder(
         current: 0,
         total: 0,
     });
-    let all_formats = SupportedFormat::ALL.to_vec();
     let mut audio_files = Vec::new();
-    find_audio_files(input_dir, &all_formats, true, &mut audio_files)?;
-    audio_files.sort_by(|(a, _), (b, _)| a.cmp(b));
+    find_audio_files(input_dir, &mut audio_files)?;
 
-    Ok(import_tracks(lib, &audio_files, on_progress))
+    Ok(import_tracks(lib, audio_files, on_progress))
 }
 
 /// Import specific audio files into the library.
@@ -114,8 +91,6 @@ pub fn import_files(
     paths: Vec<PathBuf>,
     on_progress: &(dyn Fn(SyncProgress) + Sync),
 ) -> ImportResult {
-    let mut audio_files: Vec<_> = paths.into_iter().filter_map(classify_file).collect();
-    audio_files.sort_by(|(a, _), (b, _)| a.cmp(b));
-
-    import_tracks(lib, &audio_files, on_progress)
+    let audio_files = paths.into_iter().filter(|p| is_audio_file(p)).collect();
+    import_tracks(lib, audio_files, on_progress)
 }

@@ -1,8 +1,17 @@
+// Copyright (c) 2026 Lluc Simó Margalef <lluc.simo@protonmail.com>
+//
+// This program is free software: you can redistribute it and/or modify it under
+// the terms of the GNU Affero General Public License as published by the Free
+// Software Foundation, either version 3 of the License, or (at your option) any
+// later version.
+//
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 //! Library backend wrapping aoide's embedded environment.
 //!
-//! Replaces `db.rs` — owns an aoide [`Environment`] with a connection-pooled
-//! `SQLite` database and exposes blocking methods that mirror the old API surface.
-//! Internally, async aoide calls are driven by a dedicated tokio runtime.
+//! Owns an aoide [`Environment`] with a connection-pooled `SQLite` database and
+//! exposes blocking methods. Internally, async aoide calls are driven by a
+//! dedicated tokio runtime.
 
 use std::{
     collections::{HashMap, HashSet},
@@ -15,12 +24,18 @@ use aoide::{
     CollectionUid,
     api::{
         Pagination,
-        track::search::{Filter, Params as SearchParams, PhraseFieldFilter},
+        track::{
+            replace::Summary as ReplaceSummary,
+            search::{Filter, Params as SearchParams, PhraseFieldFilter},
+        },
     },
     backend_embedded::{self, Environment},
     collection::{Collection, MediaSourceConfig},
     media::content::ContentPathConfig,
+    repo::track::ReplaceMode,
     storage_sqlite::connection as conn,
+    track::Entity,
+    usecases::track::{ValidatedInput, replace::Params as ReplaceParams, validate_input},
 };
 
 use crate::bridge::{self, TrackField, TrackView};
@@ -106,27 +121,43 @@ impl Drop for Library {
 // ── Read operations ──────────────────────────────────────────────
 
 impl Library {
-    fn all_entities(&self) -> Result<Vec<aoide::track::Entity>> {
+    /// Load every track entity matching `filter` (`None` = all).
+    fn search_entities(
+        &self,
+        filter: Option<Filter>,
+        context: &'static str,
+    ) -> Result<Vec<Entity>> {
+        let params = SearchParams {
+            filter,
+            ..SearchParams::default()
+        };
         self.rt.block_on(async {
             backend_embedded::track::search(
                 self.env.db_gatekeeper(),
                 self.collection_uid.clone(),
-                SearchParams::default(),
+                params,
                 Pagination::default(),
             )
             .await
-            .context("search all track entities")
+            .context(context)
         })
+    }
+
+    fn all_entities(&self, context: &'static str) -> Result<Vec<Entity>> {
+        self.search_entities(None, context)
+    }
+
+    /// Load every file variant of the logical track identified by `track_id`.
+    fn entities_of_track(&self, track_id: &str, context: &'static str) -> Result<Vec<Entity>> {
+        let mut entities = self.all_entities(context)?;
+        entities.retain(|entity| bridge::track_id(entity) == track_id);
+        Ok(entities)
     }
 
     /// Load all tracks in the collection, flattened into [`TrackView`]s.
     pub fn all_tracks(&self) -> Result<Vec<TrackView>> {
-        let flattened = self
-            .all_entities()?
-            .into_iter()
-            .map(|entity| bridge::flatten(&entity))
-            .collect();
-        Ok(group_track_views(flattened))
+        let entities = self.all_entities("search all track entities")?;
+        Ok(group_track_views(entities.iter().map(bridge::flatten)))
     }
 
     /// Search tracks using aoide's phrase filter.
@@ -135,26 +166,9 @@ impl Library {
     /// by whitespace and matched case-insensitively against title, artist,
     /// album, and other string fields via aoide's `PhraseFieldFilter`.
     pub fn search_tracks(&self, query: &str) -> Result<Vec<TrackView>> {
-        let filter = build_phrase_filter(query);
-        let params = SearchParams {
-            filter,
-            ..SearchParams::default()
-        };
-        let entities = self.rt.block_on(async {
-            backend_embedded::track::search(
-                self.env.db_gatekeeper(),
-                self.collection_uid.clone(),
-                params,
-                Pagination::default(),
-            )
-            .await
-            .context("search tracks by query")
-        })?;
-        let flattened = entities
-            .into_iter()
-            .map(|entity| bridge::flatten(&entity))
-            .collect();
-        Ok(group_track_views(flattened))
+        let entities =
+            self.search_entities(build_phrase_filter(query), "search tracks by query")?;
+        Ok(group_track_views(entities.iter().map(bridge::flatten)))
     }
 
     /// Return entity UIDs of every track as strings.
@@ -162,7 +176,7 @@ impl Library {
         let mut ids = Vec::new();
         let mut seen = HashSet::new();
 
-        for entity in self.all_entities()? {
+        for entity in self.all_entities("search all track entities")? {
             let track_id = bridge::track_id(&entity);
             if seen.insert(track_id.clone()) {
                 ids.push(track_id);
@@ -181,55 +195,18 @@ impl Library {
     /// Loads all entities for that logical track, applies the edit, validates,
     /// and replaces them in the database.
     pub fn update_track(&self, track_id: &str, field: &TrackField) -> Result<()> {
-        let track_id = track_id.to_owned();
-        self.rt.block_on(async {
-            let mut entities = backend_embedded::track::search(
-                self.env.db_gatekeeper(),
-                self.collection_uid.clone(),
-                SearchParams::default(),
-                Pagination::default(),
-            )
-            .await
-            .context("search tracks for update")?
-            .into_iter()
-            .filter(|entity| bridge::track_id(entity) == track_id)
-            .collect::<Vec<_>>();
+        let mut entities = self.entities_of_track(track_id, "search tracks for update")?;
+        if entities.is_empty() {
+            return Err(anyhow!("track not found: {track_id}"));
+        }
 
-            if entities.is_empty() {
-                return Err(anyhow!("track not found: {track_id}"));
-            }
-
-            let mut validated_batch = Vec::with_capacity(entities.len());
-            for entity in &mut entities {
-                bridge::apply_edit(entity, field.clone());
-
-                let track = entity.body.track.clone();
-                let (validated, _invalidities) = aoide::usecases::track::validate_input(track);
-                validated_batch.push(validated);
-            }
-
-            let params = aoide::usecases::track::replace::Params {
-                mode: aoide::repo::track::ReplaceMode::UpdateOnly,
-                resolve_path_from_url: false,
-                preserve_collected_at: true,
-                update_last_synchronized_rev: false,
-                decode_gigtags: true,
-            };
-
-            backend_embedded::track::replace_many_by_media_source_content_path(
-                self.env.db_gatekeeper(),
-                self.collection_uid.clone(),
-                params,
-                validated_batch,
-            )
-            .await
-            .context("replace tracks after edit")?;
-
-            Ok(())
-        })?;
+        for entity in &mut entities {
+            bridge::apply_field(&mut entity.body.track, field.clone());
+        }
+        self.update_entities(&entities, "replace tracks after edit")?;
 
         // Best-effort: write updated metadata back into audio file tags.
-        if let Err(e) = self.export_track_metadata(&track_id) {
+        if let Err(e) = self.export_track_metadata(track_id) {
             eprintln!("metadata export after edit failed for {track_id}: {e}");
         }
 
@@ -239,10 +216,9 @@ impl Library {
     /// Delete every file variant of a logical track by its stable track ID.
     pub fn delete_track(&self, track_id: &str) -> Result<()> {
         let content_paths: Vec<_> = self
-            .all_entities()?
-            .into_iter()
-            .filter(|entity| bridge::track_id(entity) == track_id)
-            .map(|entity| bridge::content_path(&entity))
+            .entities_of_track(track_id, "search tracks for deletion")?
+            .iter()
+            .map(bridge::content_path)
             .collect();
 
         if content_paths.is_empty() {
@@ -369,25 +345,12 @@ impl Library {
             return Ok((0, warnings));
         }
 
-        let params = aoide::usecases::track::replace::Params {
-            mode: aoide::repo::track::ReplaceMode::UpdateOrCreate,
-            resolve_path_from_url: false,
-            preserve_collected_at: true,
-            update_last_synchronized_rev: true,
-            decode_gigtags: true,
-        };
-
         // One batch call for all validated tracks.
-        let summary = self.rt.block_on(async {
-            backend_embedded::track::replace_many_by_media_source_content_path(
-                self.env.db_gatekeeper(),
-                self.collection_uid.clone(),
-                params,
-                validated_batch,
-            )
-            .await
-            .context("batch store imported tracks")
-        })?;
+        let summary = self.replace_tracks(
+            replace_params(ReplaceMode::UpdateOrCreate),
+            validated_batch,
+            "batch store imported tracks",
+        )?;
 
         append_import_summary_warnings(&mut warnings, &summary);
         let imported = import_summary_count(&summary);
@@ -398,61 +361,19 @@ impl Library {
     /// Overwrite all metadata fields of an existing track from a [`TrackView`].
     ///
     /// Loads the entity once, applies every field, validates, and writes back in one operation.
-    pub fn overwrite_track_fields(
-        &self,
-        track_id: &str,
-        view: &crate::bridge::TrackView,
-    ) -> Result<()> {
-        let track_id = track_id.to_owned();
-        let view = view.clone();
-        self.rt.block_on(async {
-            let mut entities = backend_embedded::track::search(
-                self.env.db_gatekeeper(),
-                self.collection_uid.clone(),
-                SearchParams::default(),
-                Pagination::default(),
-            )
-            .await
-            .context("search tracks for overwrite")?
-            .into_iter()
-            .filter(|entity| bridge::track_id(entity) == track_id)
-            .collect::<Vec<_>>();
+    pub fn overwrite_track_fields(&self, track_id: &str, view: &TrackView) -> Result<()> {
+        let mut entities = self.entities_of_track(track_id, "search tracks for overwrite")?;
+        if entities.is_empty() {
+            return Err(anyhow!("track not found: {track_id}"));
+        }
 
-            if entities.is_empty() {
-                return Err(anyhow!("track not found: {track_id}"));
-            }
-
-            let mut validated_batch = Vec::with_capacity(entities.len());
-            for entity in &mut entities {
-                crate::bridge::apply_all_fields(entity, &view);
-
-                let track = entity.body.track.clone();
-                let (validated, _invalidities) = aoide::usecases::track::validate_input(track);
-                validated_batch.push(validated);
-            }
-
-            let params = aoide::usecases::track::replace::Params {
-                mode: aoide::repo::track::ReplaceMode::UpdateOnly,
-                resolve_path_from_url: false,
-                preserve_collected_at: true,
-                update_last_synchronized_rev: false,
-                decode_gigtags: true,
-            };
-
-            backend_embedded::track::replace_many_by_media_source_content_path(
-                self.env.db_gatekeeper(),
-                self.collection_uid.clone(),
-                params,
-                validated_batch,
-            )
-            .await
-            .context("replace tracks after overwrite")?;
-
-            Ok(())
-        })?;
+        for entity in &mut entities {
+            bridge::apply_view(&mut entity.body.track, view);
+        }
+        self.update_entities(&entities, "replace tracks after overwrite")?;
 
         // Best-effort: write updated metadata back into audio file tags.
-        if let Err(e) = self.export_track_metadata(&track_id) {
+        if let Err(e) = self.export_track_metadata(track_id) {
             eprintln!("metadata export after overwrite failed for {track_id}: {e}");
         }
 
@@ -465,53 +386,12 @@ impl Library {
             return Ok(());
         }
 
-        let current_track_id = current_track_id.to_owned();
-        let new_track_id = new_track_id.to_owned();
-        self.rt.block_on(async {
-            let mut entities = backend_embedded::track::search(
-                self.env.db_gatekeeper(),
-                self.collection_uid.clone(),
-                SearchParams::default(),
-                Pagination::default(),
-            )
-            .await
-            .context("search tracks for ID reassignment")?
-            .into_iter()
-            .filter(|entity| bridge::track_id(entity) == current_track_id)
-            .collect::<Vec<_>>();
-
-            if entities.is_empty() {
-                return Ok(());
-            }
-
-            let mut validated_batch = Vec::with_capacity(entities.len());
-            for entity in &mut entities {
-                bridge::set_track_id(&mut entity.body.track, &new_track_id);
-
-                let track = entity.body.track.clone();
-                let (validated, _invalidities) = aoide::usecases::track::validate_input(track);
-                validated_batch.push(validated);
-            }
-
-            let params = aoide::usecases::track::replace::Params {
-                mode: aoide::repo::track::ReplaceMode::UpdateOnly,
-                resolve_path_from_url: false,
-                preserve_collected_at: true,
-                update_last_synchronized_rev: false,
-                decode_gigtags: true,
-            };
-
-            backend_embedded::track::replace_many_by_media_source_content_path(
-                self.env.db_gatekeeper(),
-                self.collection_uid.clone(),
-                params,
-                validated_batch,
-            )
-            .await
-            .context("reassign logical track IDs")?;
-
-            Ok(())
-        })
+        let mut entities =
+            self.entities_of_track(current_track_id, "search tracks for ID reassignment")?;
+        for entity in &mut entities {
+            bridge::set_track_id(&mut entity.body.track, new_track_id);
+        }
+        self.update_entities(&entities, "reassign logical track IDs")
     }
 
     /// Write DB metadata back into the audio file tags for every file variant
@@ -521,12 +401,7 @@ impl Library {
     pub fn export_track_metadata(&self, track_id: &str) -> Result<(u32, Vec<String>)> {
         use aoide::media_file::io::export::{ExportTrackConfig, export_track_to_file_path};
 
-        let entities = self
-            .all_entities()?
-            .into_iter()
-            .filter(|entity| bridge::track_id(entity) == track_id)
-            .collect::<Vec<_>>();
-
+        let entities = self.entities_of_track(track_id, "search tracks for metadata export")?;
         if entities.is_empty() {
             return Err(anyhow!("track not found: {track_id}"));
         }
@@ -612,60 +487,65 @@ impl Library {
     }
 
     fn backfill_track_ids(&self) -> Result<()> {
+        let mut entities = self.all_entities("search tracks for ID backfill")?;
+        entities.retain(|entity| bridge::track_id_from_track(&entity.body.track).is_none());
+
+        for entity in &mut entities {
+            let entity_uid = entity.hdr.uid.to_string();
+            bridge::set_track_id(&mut entity.body.track, &entity_uid);
+        }
+        self.update_entities(&entities, "backfill logical track IDs")
+    }
+
+    /// Validate and write back already-existing entities after an in-memory change.
+    fn update_entities(&self, entities: &[Entity], context: &'static str) -> Result<()> {
+        if entities.is_empty() {
+            return Ok(());
+        }
+        let validated = entities
+            .iter()
+            .map(|entity| validate_input(entity.body.track.clone()).0)
+            .collect();
+        self.replace_tracks(replace_params(ReplaceMode::UpdateOnly), validated, context)?;
+        Ok(())
+    }
+
+    fn replace_tracks(
+        &self,
+        params: ReplaceParams,
+        validated: Vec<ValidatedInput>,
+        context: &'static str,
+    ) -> Result<ReplaceSummary> {
         self.rt.block_on(async {
-            let entities = backend_embedded::track::search(
-                self.env.db_gatekeeper(),
-                self.collection_uid.clone(),
-                SearchParams::default(),
-                Pagination::default(),
-            )
-            .await
-            .context("search tracks for ID backfill")?;
-
-            let mut validated_batch = Vec::new();
-            for mut entity in entities {
-                if bridge::track_id_from_track(&entity.body.track).is_some() {
-                    continue;
-                }
-
-                let entity_uid = entity.hdr.uid.to_string();
-                bridge::set_track_id(&mut entity.body.track, &entity_uid);
-
-                let track = entity.body.track.clone();
-                let (validated, _invalidities) = aoide::usecases::track::validate_input(track);
-                validated_batch.push(validated);
-            }
-
-            if validated_batch.is_empty() {
-                return Ok(());
-            }
-
-            let params = aoide::usecases::track::replace::Params {
-                mode: aoide::repo::track::ReplaceMode::UpdateOnly,
-                resolve_path_from_url: false,
-                preserve_collected_at: true,
-                update_last_synchronized_rev: false,
-                decode_gigtags: true,
-            };
-
             backend_embedded::track::replace_many_by_media_source_content_path(
                 self.env.db_gatekeeper(),
                 self.collection_uid.clone(),
                 params,
-                validated_batch,
+                validated,
             )
             .await
-            .context("backfill logical track IDs")?;
-
-            Ok(())
+            .context(context)
         })
+    }
+}
+
+/// Replace parameters shared by every write: imports create or update and stamp the
+/// synchronized revision, edits of existing tracks only update.
+fn replace_params(mode: ReplaceMode) -> ReplaceParams {
+    let update_last_synchronized_rev = matches!(mode, ReplaceMode::UpdateOrCreate);
+    ReplaceParams {
+        mode,
+        resolve_path_from_url: false,
+        preserve_collected_at: true,
+        update_last_synchronized_rev,
+        decode_gigtags: true,
     }
 }
 
 // ── Parallel import helpers ──────────────────────────────────────
 
 enum ImportOutcome {
-    Validated(Box<aoide::usecases::track::ValidatedInput>),
+    Validated(Box<ValidatedInput>),
     Skipped,
     Warning(String),
 }
@@ -742,11 +622,11 @@ fn process_single_import(
         bridge::apply_view(&mut track, metadata);
     }
 
-    let (validated, _invalidities) = aoide::usecases::track::validate_input(track);
+    let (validated, _invalidities) = validate_input(track);
     ImportOutcome::Validated(Box::new(validated))
 }
 
-fn group_track_views(flattened: Vec<TrackView>) -> Vec<TrackView> {
+fn group_track_views(flattened: impl IntoIterator<Item = TrackView>) -> Vec<TrackView> {
     let mut grouped: HashMap<String, Vec<TrackView>> = HashMap::new();
     for track in flattened {
         grouped.entry(track.id.clone()).or_default().push(track);
@@ -817,10 +697,7 @@ fn track_richness(track: &TrackView) -> usize {
     .count()
 }
 
-fn append_import_summary_warnings(
-    warnings: &mut Vec<String>,
-    summary: &aoide::api::track::replace::Summary,
-) {
+fn append_import_summary_warnings(warnings: &mut Vec<String>, summary: &ReplaceSummary) {
     warnings.extend(
         summary
             .failed
@@ -847,7 +724,7 @@ fn append_import_summary_warnings(
     }));
 }
 
-fn import_summary_count(summary: &aoide::api::track::replace::Summary) -> u32 {
+fn import_summary_count(summary: &ReplaceSummary) -> u32 {
     let imported = summary.created.len() + summary.updated.len() + summary.unchanged.len();
     u32::try_from(imported).unwrap_or(u32::MAX)
 }
@@ -866,4 +743,68 @@ fn build_phrase_filter(query: &str) -> Option<Filter> {
         fields: vec![], // empty = search all string fields
         terms,
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::bridge::TrackFileView;
+
+    fn variant(id: &str, title: &str, path: &str, added_at: &str) -> TrackView {
+        TrackView {
+            id: id.to_owned(),
+            title: title.to_owned(),
+            added_at: added_at.to_owned(),
+            files: vec![TrackFileView {
+                file_path: path.to_owned(),
+                ..TrackFileView::default()
+            }],
+            ..TrackView::default()
+        }
+    }
+
+    #[test]
+    fn variants_of_one_track_are_merged() {
+        let grouped = group_track_views([
+            variant("a", "", "/a.flac", "2024-02-01T00:00:00+00:00"),
+            variant("a", "Song", "/a.mp3", "2024-01-01T00:00:00+00:00"),
+            variant("a", "Song", "/a.mp3", "2024-03-01T00:00:00+00:00"),
+        ]);
+
+        assert_eq!(grouped.len(), 1);
+        let merged = &grouped[0];
+        // Metadata comes from the richest variant, the date from the oldest one.
+        assert_eq!(merged.title, "Song");
+        assert_eq!(merged.added_at, "2024-01-01T00:00:00+00:00");
+        // Duplicate paths collapse into one file.
+        let mut paths: Vec<_> = merged.files.iter().map(|f| f.file_path.as_str()).collect();
+        paths.sort_unstable();
+        assert_eq!(paths, ["/a.flac", "/a.mp3"]);
+    }
+
+    #[test]
+    fn groups_are_sorted_by_artist_album_title() {
+        let mut b = variant("1", "B", "/b.mp3", "");
+        b.artist = "Zed".to_owned();
+        let mut a = variant("2", "A", "/a.mp3", "");
+        a.artist = "Abe".to_owned();
+        let mut a2 = variant("3", "C", "/c.mp3", "");
+        a2.artist = "Abe".to_owned();
+
+        let ids: Vec<_> = group_track_views([b, a2, a])
+            .into_iter()
+            .map(|t| t.id)
+            .collect();
+        assert_eq!(ids, ["2", "3", "1"]);
+    }
+
+    #[test]
+    fn phrase_filter_splits_on_whitespace() {
+        assert!(build_phrase_filter("  ").is_none());
+        let Some(Filter::Phrase(filter)) = build_phrase_filter(" daft  punk ") else {
+            panic!("expected a phrase filter");
+        };
+        assert_eq!(filter.terms, ["daft", "punk"]);
+        assert_eq!(filter.fields, []);
+    }
 }

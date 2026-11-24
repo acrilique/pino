@@ -752,13 +752,13 @@ pub fn Library(
                                                         Column::Rating => {
                                                             let tid = track_id.clone();
                                                             rsx! {
-                                                                RatingCell { track_id: track_id.clone(), value: twf.rating, on_change: move |v: u8| update_rating(tid.clone(), v) }
+                                                                RatingCell { value: twf.rating, on_change: move |v: u8| update_rating(tid.clone(), v) }
                                                             }
                                                         },
                                                         Column::Color => {
                                                             let tid = track_id.clone();
                                                             rsx! {
-                                                                ColorCell { track_id: track_id.clone(), value: twf.color, on_change: move |v: u8| update_color(tid.clone(), v) }
+                                                                ColorCell { value: twf.color, on_change: move |v: u8| update_color(tid.clone(), v) }
                                                             }
                                                         },
                                                         Column::AddedAt => rsx! {

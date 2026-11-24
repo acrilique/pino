@@ -440,3 +440,23 @@ pub fn load_page_size() -> usize {
     let size = Prefs::load().page_size;
     if size > 0 { size } else { DEFAULT_PAGE_SIZE }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn column_ids_round_trip() {
+        for &col in Column::ALL {
+            assert!(Column::from_str(col.as_str()) == Some(col));
+        }
+        assert!(Column::from_str("nope").is_none());
+    }
+
+    #[test]
+    fn default_hidden_columns_are_known_columns() {
+        for col in Column::HIDDEN_BY_DEFAULT {
+            assert!(Column::ALL.contains(col));
+        }
+    }
+}
