@@ -75,7 +75,6 @@ pub struct TrackView {
 pub struct TrackFileView {
     pub format: String,
     pub file_path: String,
-    pub file_size: u32,
     pub sample_rate: u32,
     pub bitrate: u32,
 }
@@ -162,8 +161,6 @@ pub fn flatten(entity: &Entity) -> TrackView {
         tags: plain_tags(track),
         files: vec![TrackFileView {
             format: format_from_path(file_path),
-            file_size: std::fs::metadata(file_path)
-                .map_or(0, |m| m.len().try_into().unwrap_or(u32::MAX)),
             file_path: file_path.to_owned(),
             sample_rate: audio.sample_rate.map_or(0, |sr| sr.value() as u32),
             bitrate: audio.bitrate.map_or(0, |br| br.value() as u32),
