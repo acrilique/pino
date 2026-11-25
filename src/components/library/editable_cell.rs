@@ -92,6 +92,14 @@ pub fn EditableCell(
         .is_some_and(|(id, col)| id == &track_id && *col == column);
 
     if is_editing {
+        // Leaving the cell without changing it must not write to the DB or the audio file.
+        let mut finish = move |original: &str| {
+            if edit_value().trim() == original.trim() {
+                editing.set(None);
+            } else {
+                on_commit.call(());
+            }
+        };
         rsx! {
             td { class: "editing-cell",
                 input {
@@ -107,16 +115,17 @@ pub fn EditableCell(
                             edit_value.set(v);
                         }
                     },
-                    onkeydown: move |e: KeyboardEvent| {
-                        if e.key() == Key::Enter {
-                            on_commit.call(());
-                        } else if e.key() == Key::Escape {
-                            editing.set(None);
+                    onkeydown: {
+                        let original = value.clone();
+                        move |e: KeyboardEvent| {
+                            if e.key() == Key::Enter {
+                                finish(&original);
+                            } else if e.key() == Key::Escape {
+                                editing.set(None);
+                            }
                         }
                     },
-                    onblur: move |_| {
-                        on_commit.call(());
-                    },
+                    onblur: move |_| finish(&value),
                 }
             }
         }

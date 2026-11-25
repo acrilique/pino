@@ -58,7 +58,9 @@ pub fn ColorCell(value: u8, on_change: EventHandler<u8>) -> Element {
                         button {
                             class: if val == value { "color-option active" } else { "color-option" },
                             onclick: move |_| {
-                                on_change.call(val);
+                                if val != value {
+                                    on_change.call(val);
+                                }
                                 open.set(None);
                             },
                             span {
