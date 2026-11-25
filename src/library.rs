@@ -213,11 +213,7 @@ impl Library {
         }
         self.update_entities(&entities, "replace tracks after edit")?;
 
-        // Best-effort: write updated metadata back into audio file tags.
-        if let Err(e) = self.export_track_metadata(track_id) {
-            eprintln!("metadata export after edit failed for {track_id}: {e}");
-        }
-
+        self.export_track_metadata_best_effort(track_id);
         Ok(())
     }
 
@@ -379,11 +375,7 @@ impl Library {
         }
         self.update_entities(&entities, "replace tracks after overwrite")?;
 
-        // Best-effort: write updated metadata back into audio file tags.
-        if let Err(e) = self.export_track_metadata(track_id) {
-            eprintln!("metadata export after overwrite failed for {track_id}: {e}");
-        }
-
+        self.export_track_metadata_best_effort(track_id);
         Ok(())
     }
 
@@ -399,6 +391,19 @@ impl Library {
             bridge::set_track_id(&mut entity.body.track, new_track_id);
         }
         self.update_entities(&entities, "reassign logical track IDs")
+    }
+
+    /// Write updated metadata back into the audio file tags, logging instead of failing: the
+    /// database is the source of truth, so an unwritable file must not undo the edit.
+    fn export_track_metadata_best_effort(&self, track_id: &str) {
+        match self.export_track_metadata(track_id) {
+            Ok((_, warnings)) => {
+                for warning in warnings {
+                    eprintln!("metadata export: {warning}");
+                }
+            }
+            Err(e) => eprintln!("metadata export failed for {track_id}: {e}"),
+        }
     }
 
     /// Write DB metadata back into the audio file tags for every file variant
