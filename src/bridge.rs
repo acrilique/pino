@@ -201,12 +201,12 @@ pub fn track_id(entity: &Entity) -> String {
 
 /// Return stored logical Pino track ID, if any.
 pub fn track_id_from_track(track: &track::Track) -> Option<String> {
-    custom_facet_value(track, &pino_track_id_facet())
+    custom_facet_value(track, &track_id_facet())
 }
 
 /// Persist logical Pino track ID inside custom track tags.
 pub fn set_track_id(track: &mut track::Track, id: &str) {
-    set_facet_label(track, &pino_track_id_facet(), id.to_owned());
+    set_facet_label(track, &track_id_facet(), id.to_owned());
 }
 
 /// Return the content path stored for a track entity.
@@ -425,7 +425,8 @@ fn set_rating(track: &mut track::Track, value: u8) {
     }
 }
 
-fn pino_track_id_facet() -> FacetId {
+/// Facet under which the logical Pino track ID is stored.
+pub fn track_id_facet() -> FacetId {
     FacetId::from_unchecked(PINO_TRACK_ID_FACET)
 }
 

@@ -24,6 +24,8 @@ use aoide::{
     CollectionUid,
     api::{
         Pagination,
+        filter::StringPredicate,
+        tag::search::{FacetsFilter, Filter as TagFilter},
         track::{
             replace::Summary as ReplaceSummary,
             search::{Filter, Params as SearchParams, PhraseFieldFilter},
@@ -148,10 +150,16 @@ impl Library {
     }
 
     /// Load every file variant of the logical track identified by `track_id`.
+    ///
+    /// Every track carries its ID as a facet (see `backfill_track_ids`), so the lookup is a
+    /// tag filter in the database rather than a scan of the collection.
     fn entities_of_track(&self, track_id: &str, context: &'static str) -> Result<Vec<Entity>> {
-        let mut entities = self.all_entities(context)?;
-        entities.retain(|entity| bridge::track_id(entity) == track_id);
-        Ok(entities)
+        let filter = Filter::Tag(TagFilter {
+            facets: Some(FacetsFilter::AnyOf(vec![bridge::track_id_facet().into()])),
+            label: Some(StringPredicate::Equals(track_id.to_owned().into())),
+            ..TagFilter::default()
+        });
+        self.search_entities(Some(filter), context)
     }
 
     /// Load all tracks in the collection, flattened into [`TrackView`]s.
@@ -234,7 +242,6 @@ impl Library {
 
     /// Delete a track by its media source content path.
     pub fn delete_track_by_path(&self, content_path: &str) -> Result<()> {
-        use aoide::api::filter::StringPredicate;
         use std::borrow::Cow;
 
         let collection_uid = self.collection_uid.clone();
@@ -806,5 +813,86 @@ mod tests {
         };
         assert_eq!(filter.terms, ["daft", "punk"]);
         assert_eq!(filter.fields, []);
+    }
+}
+
+/// End-to-end checks against a real (temporary) aoide database.
+#[cfg(test)]
+mod db_tests {
+    use super::*;
+
+    /// A temporary directory holding a library and two silent WAV files.
+    struct Fixture {
+        dir: std::path::PathBuf,
+        lib: Library,
+        ids: Vec<String>,
+    }
+
+    impl Fixture {
+        fn new() -> Self {
+            let dir = std::env::temp_dir().join(format!("pino-test-{}", uuid::Uuid::new_v4()));
+            std::fs::create_dir_all(&dir).unwrap();
+            let files: Vec<_> = ["a.wav", "b.wav"].iter().map(|n| dir.join(n)).collect();
+            for file in &files {
+                std::fs::write(file, silent_wav()).unwrap();
+            }
+
+            let lib = Library::open(&dir.join("db")).unwrap();
+            let (imported, warnings) = lib.import_files_with_progress(&files, None).unwrap();
+            assert_eq!((imported, warnings), (2, Vec::new()));
+            let ids = lib.track_ids().unwrap();
+            Self { dir, lib, ids }
+        }
+    }
+
+    impl Drop for Fixture {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.dir);
+        }
+    }
+
+    /// One second of 8 kHz mono 16-bit silence.
+    fn silent_wav() -> Vec<u8> {
+        let data_len = 16_000u32;
+        let mut wav = Vec::new();
+        wav.extend_from_slice(b"RIFF");
+        wav.extend_from_slice(&(36 + data_len).to_le_bytes());
+        wav.extend_from_slice(b"WAVEfmt ");
+        wav.extend_from_slice(&16u32.to_le_bytes());
+        wav.extend_from_slice(&1u16.to_le_bytes()); // PCM
+        wav.extend_from_slice(&1u16.to_le_bytes()); // mono
+        wav.extend_from_slice(&8_000u32.to_le_bytes()); // sample rate
+        wav.extend_from_slice(&16_000u32.to_le_bytes()); // byte rate
+        wav.extend_from_slice(&2u16.to_le_bytes()); // block align
+        wav.extend_from_slice(&16u16.to_le_bytes()); // bits per sample
+        wav.extend_from_slice(b"data");
+        wav.extend_from_slice(&data_len.to_le_bytes());
+        wav.resize(wav.len() + data_len as usize, 0);
+        wav
+    }
+
+    #[test]
+    fn edit_changes_only_the_addressed_track() {
+        let fx = Fixture::new();
+        let (edited, other) = (&fx.ids[0], &fx.ids[1]);
+
+        fx.lib
+            .update_track(edited, &TrackField::Title("Edited".to_owned()))
+            .unwrap();
+
+        let tracks = fx.lib.all_tracks().unwrap();
+        let title = |id: &String| tracks.iter().find(|t| &t.id == id).unwrap().title.clone();
+        assert_eq!(title(edited), "Edited");
+        assert_ne!(title(other), "Edited");
+    }
+
+    #[test]
+    fn delete_removes_only_the_addressed_track() {
+        let fx = Fixture::new();
+
+        fx.lib.delete_track(&fx.ids[0]).unwrap();
+
+        assert_eq!(fx.lib.track_ids().unwrap(), [fx.ids[1].clone()]);
+        assert!(fx.lib.delete_track("no-such-track").is_err());
     }
 }
