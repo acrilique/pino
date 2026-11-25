@@ -94,9 +94,6 @@ fn App() -> Element {
     rsx! {
         div { class: "container",
             oncontextmenu: move |e: MouseEvent| e.prevent_default(),
-            h1 { "pino" }
-            p { class: "subtitle", "acrilique's USB exporter - powered by rekordcrate" }
-
             LibraryView {
                 tracks,
                 scanning,
