@@ -499,13 +499,18 @@ fn rebuild_device_db(
     let mut tag_category = None;
 
     for tv in remote_tracks {
-        let Some(track) = build_device_track(tv, dest_dir) else {
+        let Some(mut track) = build_device_track(tv, dest_dir) else {
             warnings.push(format!(
                 "Skipping '{}' in device DB: no supported file format",
                 tv.title
             ));
             continue;
         };
+        let audio_file = dest_dir.join(track.file_path.trim_start_matches('/'));
+        match import_cover(&mut export, &audio_file) {
+            Ok(artwork_path) => track.artwork_path = artwork_path.unwrap_or_default(),
+            Err(e) => warnings.push(format!("No artwork for '{}': {e}", tv.title)),
+        }
         match export.add_track(&track) {
             Ok(outcome) => {
                 if !tv.tags.is_empty() {
@@ -563,7 +568,8 @@ fn build_device_track(tv: &TrackView, dest_dir: &Path) -> Option<DeviceTrack> {
         date_added: today(),
         file_path: format!("/Contents/{relative_str}"),
         filename,
-        artwork_path: tv.artwork_path.clone(),
+        // Filled in from the cover embedded in the audio file, see `import_cover`.
+        artwork_path: String::new(),
         message: String::new(),
         tempo: tv.tempo,
         bitrate: file.bitrate,
@@ -580,6 +586,49 @@ fn build_device_track(tv: &TrackView, dest_dir: &Path) -> Option<DeviceTrack> {
         file_type: file_type.into(),
         autoload_hotcues: true,
     })
+}
+
+/// Import the cover embedded in `audio_file` as device artwork and return its device path, or
+/// `None` if the file has no cover.
+///
+/// Identical covers get the same scratch file name, which is what `import_artwork` keys on, so
+/// the tracks of an album share one artwork.
+fn import_cover(export: &mut DeviceExport, audio_file: &Path) -> Result<Option<String>, SyncError> {
+    use std::hash::{DefaultHasher, Hash, Hasher};
+
+    let Some((extension, image)) = embedded_cover(audio_file) else {
+        return Ok(None);
+    };
+    let mut hasher = DefaultHasher::new();
+    image.hash(&mut hasher);
+    let scratch =
+        std::env::temp_dir().join(format!("pino-cover-{:016x}.{extension}", hasher.finish()));
+
+    std::fs::write(&scratch, image)?;
+    let imported = export.import_artwork(&scratch);
+    let _ = std::fs::remove_file(&scratch);
+    Ok(Some(imported?))
+}
+
+/// The front cover embedded in an audio file (or else its first picture), as the image's file
+/// extension and bytes.
+fn embedded_cover(audio_file: &Path) -> Option<(String, Vec<u8>)> {
+    use lofty::config::ParseOptions;
+    use lofty::file::TaggedFileExt;
+    use lofty::picture::PictureType;
+    use lofty::probe::Probe;
+
+    let file = Probe::open(audio_file)
+        .ok()?
+        .options(ParseOptions::new().read_properties(false))
+        .read()
+        .ok()?;
+    let pictures = || file.tags().iter().flat_map(lofty::tag::Tag::pictures);
+    let picture = pictures()
+        .find(|picture| picture.pic_type() == PictureType::CoverFront)
+        .or_else(|| pictures().next())?;
+    let extension = picture.mime_type()?.ext()?;
+    Some((extension.to_owned(), picture.data().to_vec()))
 }
 
 /// Map a `u8` color value to a [`ColorIndex`].
@@ -637,6 +686,76 @@ mod tests {
 
         remote.tags.clear();
         assert!(metadata_differs(&local, &remote));
+    }
+
+    /// A 1×1 PNG.
+    const COVER: &[u8] = &[
+        0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44,
+        0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00, 0x00, 0x90,
+        0x77, 0x53, 0xde, 0x00, 0x00, 0x00, 0x0c, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9c, 0x63, 0xf8,
+        0xcf, 0xc0, 0x00, 0x00, 0x03, 0x01, 0x01, 0x00, 0xc9, 0xfe, 0x92, 0xef, 0x00, 0x00, 0x00,
+        0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
+    ];
+
+    /// Write a silent WAV to `path`, optionally with [`COVER`] embedded as its front cover.
+    fn write_audio(path: &Path, with_cover: bool) {
+        use lofty::config::WriteOptions;
+        use lofty::picture::{MimeType, Picture, PictureType};
+        use lofty::tag::{Tag, TagExt, TagType};
+
+        std::fs::write(path, crate::library::db_tests::silent_wav()).unwrap();
+        if with_cover {
+            let mut tag = Tag::new(TagType::Id3v2);
+            tag.push_picture(
+                Picture::unchecked(COVER.to_vec())
+                    .pic_type(PictureType::CoverFront)
+                    .mime_type(MimeType::Png)
+                    .build(),
+            );
+            tag.save_to_path(path, WriteOptions::default()).unwrap();
+        }
+    }
+
+    fn device_track(file_name: &str) -> TrackView {
+        TrackView {
+            title: file_name.to_owned(),
+            files: vec![crate::bridge::TrackFileView {
+                file_path: file_name.to_owned(),
+                format: "wav".to_owned(),
+                ..Default::default()
+            }],
+            ..TrackView::default()
+        }
+    }
+
+    #[test]
+    fn embedded_covers_become_device_artwork() {
+        let dest = std::env::temp_dir().join(format!("pino-test-{}", uuid::Uuid::new_v4()));
+        let contents = dest.join("Contents");
+        std::fs::create_dir_all(&contents).unwrap();
+        write_audio(&contents.join("a.wav"), true);
+        write_audio(&contents.join("b.wav"), true);
+        write_audio(&contents.join("plain.wav"), false);
+
+        let tracks = ["a.wav", "b.wav", "plain.wav"].map(device_track);
+        let warnings = SyncWarnings::new();
+        rebuild_device_db(&tracks, &dest, &warnings).unwrap();
+        assert_eq!(warnings.into_vec(), Vec::<String>::new());
+
+        let artwork_paths: Vec<_> = DeviceExport::open(&dest)
+            .unwrap()
+            .tracks()
+            .unwrap()
+            .into_iter()
+            .map(|(_, track)| track.artwork_path)
+            .collect();
+        // Both covered tracks share one artwork; the plain one has none.
+        let shared = "/PIONEER/Artwork/00001/a1.jpg";
+        assert_eq!(artwork_paths, [shared, shared, ""]);
+        assert!(dest.join("PIONEER/Artwork/00001/a1.jpg").is_file());
+        assert!(dest.join("PIONEER/Artwork/00001/a1_m.jpg").is_file());
+
+        std::fs::remove_dir_all(&dest).unwrap();
     }
 
     #[test]

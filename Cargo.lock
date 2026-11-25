@@ -4279,6 +4279,7 @@ dependencies = [
  "dioxus",
  "dioxus-primitives",
  "dirs 7.0.0",
+ "lofty",
  "open",
  "rayon",
  "rekordcrate",

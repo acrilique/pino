@@ -10,11 +10,29 @@
 use crate::format::SupportedFormat;
 use std::path::Path;
 
+/// Convert `src` to `target`, keeping the embedded cover art where the target can hold it.
 pub fn convert(src: &Path, dest: &Path, target: SupportedFormat) -> std::io::Result<()> {
+    // WAV cannot carry a cover and ffmpeg does not write one into AIFF.
+    let can_hold_cover = matches!(
+        target,
+        SupportedFormat::Mp3 | SupportedFormat::M4a | SupportedFormat::Flac
+    );
+    if can_hold_cover && run(src, dest, target, true).is_ok() {
+        return Ok(());
+    }
+    // Also the fallback when the cover is in a format the target container rejects.
+    run(src, dest, target, false)
+}
+
+fn run(src: &Path, dest: &Path, target: SupportedFormat, keep_cover: bool) -> std::io::Result<()> {
     let mut cmd = std::process::Command::new("ffmpeg");
-    cmd.args(["-i"])
-        .arg(src)
-        .args(["-y", "-vn", "-loglevel", "error"]);
+    cmd.args(["-i"]).arg(src).args(["-y", "-loglevel", "error"]);
+    if keep_cover {
+        cmd.args(["-map", "0:a", "-map", "0:v?", "-c:v", "copy"])
+            .args(["-disposition:v", "attached_pic"]);
+    } else {
+        cmd.arg("-vn");
+    }
 
     match target {
         SupportedFormat::Mp3 => {

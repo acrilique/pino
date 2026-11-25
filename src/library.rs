@@ -823,7 +823,7 @@ mod tests {
 
 /// End-to-end checks against a real (temporary) aoide database.
 #[cfg(test)]
-mod db_tests {
+pub(crate) mod db_tests {
     use super::*;
 
     /// A temporary directory holding a library and two silent WAV files.
@@ -857,7 +857,7 @@ mod db_tests {
     }
 
     /// One second of 8 kHz mono 16-bit silence.
-    fn silent_wav() -> Vec<u8> {
+    pub(crate) fn silent_wav() -> Vec<u8> {
         let data_len = 16_000u32;
         let mut wav = Vec::new();
         wav.extend_from_slice(b"RIFF");
